@@ -12,7 +12,7 @@ import os
 
 # Config
 QUEUE_AREA = (390, 324, 1276, 595)
-MODEL_TYPE = "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.pt"
+MODEL_TYPE = "https://ultralytics.com/assets/yolov8s.pt"
 MIN_CONFIDENCE = 0.025
 MIN_HEIGHT = 10
 DENSITY_FACTOR = 0.95
