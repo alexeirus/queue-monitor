@@ -9,10 +9,23 @@ from ultralytics import YOLO
 import requests
 import pytz
 import os
+import requests
+
+MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
+MODEL_PATH = "yolov8s.pt"
+
+# Download the model if not already present
+if not os.path.exists(MODEL_PATH):
+    print("Downloading YOLO model...")
+    response = requests.get(MODEL_URL)
+    with open(MODEL_PATH, "wb") as f:
+        f.write(response.content)
+
+# Load the model
+model = YOLO(MODEL_PATH)
 
 # Config
 QUEUE_AREA = (390, 324, 1276, 595)
-MODEL_TYPE = "https://ultralytics.com/assets/yolov8s.pt"
 MIN_CONFIDENCE = 0.025
 MIN_HEIGHT = 10
 DENSITY_FACTOR = 0.95
@@ -20,7 +33,6 @@ HISTORY_FILE = "queue_history.csv"
 TIMEZONE = 'Europe/Tallinn'
 
 # Load model and history
-model = YOLO(MODEL_TYPE)
 tz = pytz.timezone(TIMEZONE)
 
 if os.path.exists(HISTORY_FILE):
