@@ -1,6 +1,7 @@
 streamlit
 ultralytics==8.1.18
 opencv-python-headless
+torch
 pandas
 numpy
 pillow
