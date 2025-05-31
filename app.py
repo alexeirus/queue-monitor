@@ -11,9 +11,6 @@ import pytz
 import os
 import requests
 
-import os
-import requests
-
 MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
 MODEL_PATH = "yolov8s.pt"
 
