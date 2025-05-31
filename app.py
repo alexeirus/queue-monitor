@@ -11,17 +11,26 @@ import pytz
 import os
 import requests
 
+import os
+import requests
+
 MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
 MODEL_PATH = "yolov8s.pt"
 
-# Download the model if not already present
-if not os.path.exists(MODEL_PATH):
-    print("Downloading YOLO model...")
-    response = requests.get(MODEL_URL)
-    with open(MODEL_PATH, "wb") as f:
-        f.write(response.content)
+# Redownload if file is missing or clearly corrupted (<10MB)
+if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 10_000_000:
+    print("Downloading YOLO model from ultralytics.com...")
+    try:
+        response = requests.get(MODEL_URL, stream=True, timeout=60)
+        response.raise_for_status()
+        with open(MODEL_PATH, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        print("Model download complete.")
+    except Exception as e:
+        print(f"Model download failed: {e}")
 
-# Load the model
+from ultralytics import YOLO
 model = YOLO(MODEL_PATH)
 
 # Config
