@@ -1,4 +1,3 @@
-
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
 from datetime import datetime
