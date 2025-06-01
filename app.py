@@ -1,4 +1,3 @@
-
 import streamlit as st
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
