@@ -6,7 +6,9 @@ import pytz
 import torch.serialization
 import torch.nn.modules.container
 import ultralytics.nn.tasks
-import ultralytics.nn.modules
+import ultralytics.nn.modules.conv
+import ultralytics.nn.modules.block
+import ultralytics.nn.modules.pool
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
 
@@ -19,11 +21,11 @@ tz = pytz.timezone(TIMEZONE)
 # ✅ PyTorch 2.6+ safe class registration
 torch.serialization.add_safe_globals([
     ultralytics.nn.tasks.DetectionModel,
-    ultralytics.nn.modules.Conv,
-    ultralytics.nn.modules.C2f,
-    ultralytics.nn.modules.Bottleneck,
-    ultralytics.nn.modules.Concat,
-    ultralytics.nn.modules.SPPF,
+    ultralytics.nn.modules.conv.Conv,
+    ultralytics.nn.modules.conv.C2f,
+    ultralytics.nn.modules.block.Bottleneck,
+    ultralytics.nn.modules.block.Concat,
+    ultralytics.nn.modules.pool.SPPF,
     torch.nn.modules.container.Sequential
 ])
 
