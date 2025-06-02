@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import requests
 import torch.serialization
+import torch.nn.modules.container  # 👈 Needed for PyTorch 2.6+
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
 from datetime import datetime
@@ -14,8 +15,11 @@ MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
 MODEL_PATH = "yolov8s.pt"
 TIMEZONE = "Europe/Tallinn"
 
-# 🧠 PyTorch 2.6 workaround for YOLOv8s checkpoint loading
-torch.serialization.add_safe_globals([__import__("ultralytics.nn.tasks").nn.tasks.DetectionModel])
+# 🧠 PyTorch 2.6 workaround for model unpickling
+torch.serialization.add_safe_globals([
+    __import__("ultralytics.nn.tasks").nn.tasks.DetectionModel,
+    torch.nn.modules.container.Sequential
+])
 
 # 📥 Download model if not already available or corrupt
 if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 10000000:
