@@ -4,7 +4,9 @@ import time
 from datetime import datetime
 import pytz
 import torch.serialization
-import torch.nn.modules.container  # 👈 Required for PyTorch 2.6+
+import torch.nn.modules.container
+import ultralytics.nn.tasks
+import ultralytics.nn.modules
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
 
@@ -14,9 +16,14 @@ CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
 TIMEZONE = "Europe/Tallinn"
 tz = pytz.timezone(TIMEZONE)
 
-# 🧠 PyTorch 2.6+ compatibility: allow required globals
+# ✅ PyTorch 2.6+ safe class registration
 torch.serialization.add_safe_globals([
-    __import__("ultralytics.nn.tasks").nn.tasks.DetectionModel,
+    ultralytics.nn.tasks.DetectionModel,
+    ultralytics.nn.modules.Conv,
+    ultralytics.nn.modules.C2f,
+    ultralytics.nn.modules.Bottleneck,
+    ultralytics.nn.modules.Concat,
+    ultralytics.nn.modules.SPPF,
     torch.nn.modules.container.Sequential
 ])
 
