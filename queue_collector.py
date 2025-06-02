@@ -1,21 +1,30 @@
+import os
+import requests
+import time
+from datetime import datetime
+import pytz
+import torch.serialization
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
-from datetime import datetime
-import time
-import pytz
 
-# pytorch 2.6 work around
-import torch.serialization
-torch.serialization.add_safe_globals([__import__("ultralytics.nn.tasks").nn.tasks.DetectionModel])
-
-from ultralytics import YOLO
-model = YOLO("yolov8s.pt")
-
+MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
 MODEL_PATH = "yolov8s.pt"
 CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
 TIMEZONE = "Europe/Tallinn"
 tz = pytz.timezone(TIMEZONE)
 
+# 🧠 PyTorch 2.6 compatibility
+torch.serialization.add_safe_globals([__import__("ultralytics.nn.tasks").nn.tasks.DetectionModel])
+
+# 📥 Download YOLOv8s model if needed
+if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 10000000:
+    print("Downloading YOLOv8s model...")
+    r = requests.get(MODEL_URL, stream=True)
+    with open(MODEL_PATH, "wb") as f:
+        for chunk in r.iter_content(chunk_size=8192):
+            f.write(chunk)
+
+# ✅ Load model + analyzer
 model = YOLO(MODEL_PATH)
 analyzer = QueueAnalyzer(model)
 
