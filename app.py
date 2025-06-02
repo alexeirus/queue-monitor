@@ -1,4 +1,7 @@
 import streamlit as st
+import os
+import requests
+import torch.serialization
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
 from datetime import datetime
@@ -7,22 +10,27 @@ import cv2
 
 # Constants
 CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
+MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
 MODEL_PATH = "yolov8s.pt"
 TIMEZONE = "Europe/Tallinn"
 
-# pytorch 2.6 work around
-import torch.serialization
+# 🧠 PyTorch 2.6 workaround for YOLOv8s checkpoint loading
 torch.serialization.add_safe_globals([__import__("ultralytics.nn.tasks").nn.tasks.DetectionModel])
 
-from ultralytics import YOLO
-model = YOLO("yolov8s.pt")
+# 📥 Download model if not already available or corrupt
+if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 10000000:
+    print("Downloading YOLOv8s model...")
+    r = requests.get(MODEL_URL, stream=True)
+    with open(MODEL_PATH, "wb") as f:
+        for chunk in r.iter_content(chunk_size=8192):
+            f.write(chunk)
 
-# Load model and analyzer
+# ✅ Load model and analyzer
 model = YOLO(MODEL_PATH)
 analyzer = QueueAnalyzer(model)
 tz = pytz.timezone(TIMEZONE)
 
-# Streamlit UI
+# 🌐 Streamlit UI
 st.set_page_config(page_title="Queue Monitor", layout="wide")
 st.title("🚶 Narva Queue Monitor")
 
@@ -33,7 +41,7 @@ if image is not None:
     adjusted_count = base_count + 50 if base_count > 0 else 0
     analyzer.update_history(adjusted_count)
 
-    # Draw boxes
+    # Draw bounding boxes
     for (x1, y1, x2, y2) in detections:
         cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
