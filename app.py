@@ -4,7 +4,9 @@ import requests
 import torch.serialization
 import torch.nn.modules.container
 import ultralytics.nn.tasks
-import ultralytics.nn.modules
+import ultralytics.nn.modules.conv
+import ultralytics.nn.modules.block
+import ultralytics.nn.modules.pool
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
 from datetime import datetime
@@ -20,11 +22,11 @@ TIMEZONE = "Europe/Tallinn"
 # ✅ PyTorch 2.6+ safe class registration
 torch.serialization.add_safe_globals([
     ultralytics.nn.tasks.DetectionModel,
-    ultralytics.nn.modules.Conv,
-    ultralytics.nn.modules.C2f,
-    ultralytics.nn.modules.Bottleneck,
-    ultralytics.nn.modules.Concat,
-    ultralytics.nn.modules.SPPF,
+    ultralytics.nn.modules.conv.Conv,
+    ultralytics.nn.modules.conv.C2f,
+    ultralytics.nn.modules.block.Bottleneck,
+    ultralytics.nn.modules.block.Concat,
+    ultralytics.nn.modules.pool.SPPF,
     torch.nn.modules.container.Sequential
 ])
 
@@ -52,7 +54,6 @@ if image is not None:
     adjusted_count = base_count + 50 if base_count > 0 else 0
     analyzer.update_history(adjusted_count)
 
-    # Draw bounding boxes
     for (x1, y1, x2, y2) in detections:
         cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
