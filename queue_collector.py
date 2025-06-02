@@ -4,6 +4,13 @@ from datetime import datetime
 import time
 import pytz
 
+# pytorch 2.6 work around
+import torch.serialization
+torch.serialization.add_safe_globals([__import__("ultralytics.nn.tasks").nn.tasks.DetectionModel])
+
+from ultralytics import YOLO
+model = YOLO("yolov8s.pt")
+
 MODEL_PATH = "yolov8s.pt"
 CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
 TIMEZONE = "Europe/Tallinn"
