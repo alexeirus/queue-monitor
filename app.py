@@ -2,7 +2,9 @@ import streamlit as st
 import os
 import requests
 import torch.serialization
-import torch.nn.modules.container  # 👈 Needed for PyTorch 2.6+
+import torch.nn.modules.container
+import ultralytics.nn.tasks
+import ultralytics.nn.modules
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
 from datetime import datetime
@@ -15,9 +17,14 @@ MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
 MODEL_PATH = "yolov8s.pt"
 TIMEZONE = "Europe/Tallinn"
 
-# 🧠 PyTorch 2.6 workaround for model unpickling
+# ✅ PyTorch 2.6+ safe class registration
 torch.serialization.add_safe_globals([
-    __import__("ultralytics.nn.tasks").nn.tasks.DetectionModel,
+    ultralytics.nn.tasks.DetectionModel,
+    ultralytics.nn.modules.Conv,
+    ultralytics.nn.modules.C2f,
+    ultralytics.nn.modules.Bottleneck,
+    ultralytics.nn.modules.Concat,
+    ultralytics.nn.modules.SPPF,
     torch.nn.modules.container.Sequential
 ])
 
