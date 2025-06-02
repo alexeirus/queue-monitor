@@ -6,10 +6,10 @@ import pytz
 import torch.serialization
 import torch.nn.modules.container
 import ultralytics.nn.tasks
-import ultralytics.nn.modules.pooling
 import ultralytics.nn.modules.conv
 import ultralytics.nn.modules.block
-import ultralytics.nn.modules.head
+import ultralytics.nn.modules.pooling
+import ultralytics.nn.modules.head  # optional, for future-proofing
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
 
