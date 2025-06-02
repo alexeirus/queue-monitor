@@ -8,7 +8,7 @@ import torch.nn.modules.container
 import ultralytics.nn.tasks
 import ultralytics.nn.modules.conv
 import ultralytics.nn.modules.block
-import ultralytics.nn.modules.pool
+import ultralytics.nn.modules.common
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
 
@@ -25,7 +25,7 @@ torch.serialization.add_safe_globals([
     ultralytics.nn.modules.conv.C2f,
     ultralytics.nn.modules.block.Bottleneck,
     ultralytics.nn.modules.block.Concat,
-    ultralytics.nn.modules.pool.SPPF,
+    ultralytics.nn.modules.common.SPPF,
     torch.nn.modules.container.Sequential
 ])
 
