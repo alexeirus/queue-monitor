@@ -23,9 +23,9 @@ TIMEZONE = "Europe/Tallinn"
 torch.serialization.add_safe_globals([
     ultralytics.nn.tasks.DetectionModel,
     ultralytics.nn.modules.conv.Conv,
-    ultralytics.nn.modules.block.C2f,  # ✅ correct source
+    ultralytics.nn.modules.conv.Concat,      # ✅ Moved here
+    ultralytics.nn.modules.block.C2f,
     ultralytics.nn.modules.block.Bottleneck,
-    ultralytics.nn.modules.block.Concat,
     ultralytics.nn.modules.head.SPPF,
     torch.nn.modules.container.Sequential
 ])
