@@ -10,6 +10,13 @@ CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
 MODEL_PATH = "yolov8s.pt"
 TIMEZONE = "Europe/Tallinn"
 
+# pytorch 2.6 work around
+import torch.serialization
+torch.serialization.add_safe_globals([__import__("ultralytics.nn.tasks").nn.tasks.DetectionModel])
+
+from ultralytics import YOLO
+model = YOLO("yolov8s.pt")
+
 # Load model and analyzer
 model = YOLO(MODEL_PATH)
 analyzer = QueueAnalyzer(model)
