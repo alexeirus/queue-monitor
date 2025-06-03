@@ -31,7 +31,12 @@ safe_globals = [
 ]
 if sppf:
     safe_globals.append(sppf)
-torch.serialization.add_safe_globals(safe_globals)
+
+try:
+    torch.serialization.add_safe_globals(safe_globals)
+except ModuleNotFoundError as e:
+    print("Torch serialization setup failed. Check dependencies.")
+    exit(1)
 
 # Config
 MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
