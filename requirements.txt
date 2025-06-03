@@ -1,5 +1,5 @@
 streamlit
-ultralytics==8.1.18
+ultralytics==8.0.204
 opencv-python-headless
 torch
 pandas
