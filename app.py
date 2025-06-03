@@ -32,7 +32,13 @@ safe_globals = [
 ]
 if sppf:
     safe_globals.append(sppf)
-torch.serialization.add_safe_globals(safe_globals)
+
+# Avoid micropip import errors in restricted environments
+try:
+    torch.serialization.add_safe_globals(safe_globals)
+except ModuleNotFoundError as e:
+    st.error("Torch serialization failed. Check module availability.")
+    st.stop()
 
 # Config
 CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
