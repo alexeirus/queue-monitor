@@ -4,6 +4,7 @@ import requests
 import torch.serialization
 import torch.nn.modules.container
 import ultralytics.nn.tasks
+import ultralytics.nn.modules  # 👈 legacy path
 import ultralytics.nn.modules.conv
 import ultralytics.nn.modules.block
 from ultralytics import YOLO
@@ -12,7 +13,7 @@ from datetime import datetime
 import pytz
 import cv2
 
-# 🧠 Optional import for SPPF (won’t break if missing)
+# ✅ Optional import for SPPF
 try:
     import ultralytics.nn.modules.common as ul_common
     sppf = ul_common.SPPF
@@ -22,7 +23,8 @@ except (ImportError, AttributeError):
 # ✅ PyTorch 2.6+ safe class registration
 safe_globals = [
     ultralytics.nn.tasks.DetectionModel,
-    ultralytics.nn.modules.conv.Conv,
+    ultralytics.nn.modules.Conv,                    # legacy path
+    ultralytics.nn.modules.conv.Conv,               # current path
     ultralytics.nn.modules.conv.Concat,
     ultralytics.nn.modules.block.C2f,
     ultralytics.nn.modules.block.Bottleneck,
