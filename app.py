@@ -1,8 +1,9 @@
+import streamlit as st
 import os
 import requests
-import time
 from datetime import datetime
 import pytz
+import cv2
 import torch.serialization
 import torch.nn.modules.container
 import ultralytics.nn.tasks
@@ -22,7 +23,7 @@ except (ImportError, AttributeError):
 # ✅ Register required globals
 safe_globals = [
     ultralytics.nn.tasks.DetectionModel,
-    ultralytics.nn.modules.Conv,                     # <- missing in previous versions
+    ultralytics.nn.modules.Conv,
     ultralytics.nn.modules.conv.Conv,
     ultralytics.nn.modules.conv.Concat,
     ultralytics.nn.modules.block.C2f,
@@ -34,30 +35,34 @@ if sppf:
 
 torch.serialization.add_safe_globals(safe_globals)
 
-# ✅ Config
+# Config
+CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
 MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
 MODEL_PATH = "yolov8s.pt"
-CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
 TIMEZONE = "Europe/Tallinn"
 tz = pytz.timezone(TIMEZONE)
 
-# 📥 Download model if missing
-if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 10000000:
-    st.warning("Downloading YOLOv8s model...")
-    r = requests.get(MODEL_URL, stream=True)
-    with open(MODEL_PATH, "wb") as f:
-        for chunk in r.iter_content(chunk_size=8192):
-            f.write(chunk)
+# ✅ Model download helper
+def ensure_model_downloaded():
+    if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 10000000:
+        st.warning("Downloading YOLOv8s model...")
+        r = requests.get(MODEL_URL, stream=True)
+        with open(MODEL_PATH, "wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                f.write(chunk)
 
-# ✅ Load YOLO and Analyzer with safe globals
-with safe_globals(safe_global_list):
-    model = YOLO(MODEL_PATH)
-    analyzer = QueueAnalyzer(model)
-
-# 🌐 Streamlit App
+# ✅ Streamlit App
 st.set_page_config(page_title="Queue Monitor", layout="wide")
 st.title("🚶 Narva Queue Monitor")
 
+# Make sure model is downloaded before loading
+ensure_model_downloaded()
+
+# Load YOLO and analyzer
+model = YOLO(MODEL_PATH)
+analyzer = QueueAnalyzer(model)
+
+# Main logic
 image = analyzer.fetch_image(CAMERA_URL)
 if image is not None:
     detections = analyzer.detect_pedestrians(image)
