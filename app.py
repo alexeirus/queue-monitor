@@ -7,7 +7,7 @@ import cv2
 import torch.serialization
 import torch.nn.modules.container
 import ultralytics.nn.tasks
-import ultralytics.nn.modules
+import ultralytics.nn.modules  # 👈 legacy path for Conv
 import ultralytics.nn.modules.conv
 import ultralytics.nn.modules.block
 from ultralytics import YOLO
@@ -20,10 +20,10 @@ try:
 except (ImportError, AttributeError):
     sppf = None
 
-# ✅ Register required globals
+# ✅ Register all necessary PyTorch globals BEFORE loading model
 safe_globals = [
     ultralytics.nn.tasks.DetectionModel,
-    ultralytics.nn.modules.Conv,
+    ultralytics.nn.modules.Conv,  # ✅ legacy Conv path used in pretrained weights
     ultralytics.nn.modules.conv.Conv,
     ultralytics.nn.modules.conv.Concat,
     ultralytics.nn.modules.block.C2f,
@@ -33,7 +33,11 @@ safe_globals = [
 if sppf:
     safe_globals.append(sppf)
 
-torch.serialization.add_safe_globals(safe_globals)
+try:
+    torch.serialization.add_safe_globals(safe_globals)
+except ModuleNotFoundError as e:
+    st.error("Torch serialization failed. Check module availability.")
+    st.stop()
 
 # Config
 CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
@@ -42,27 +46,22 @@ MODEL_PATH = "yolov8s.pt"
 TIMEZONE = "Europe/Tallinn"
 tz = pytz.timezone(TIMEZONE)
 
-# ✅ Model download helper
-def ensure_model_downloaded():
-    if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 10000000:
-        st.warning("Downloading YOLOv8s model...")
-        r = requests.get(MODEL_URL, stream=True)
-        with open(MODEL_PATH, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
+# 📥 Download model if missing
+if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 10000000:
+    st.warning("Downloading YOLOv8s model...")
+    r = requests.get(MODEL_URL, stream=True)
+    with open(MODEL_PATH, "wb") as f:
+        for chunk in r.iter_content(chunk_size=8192):
+            f.write(chunk)
 
-# ✅ Streamlit App
-st.set_page_config(page_title="Queue Monitor", layout="wide")
-st.title("🚶 Narva Queue Monitor")
-
-# Make sure model is downloaded before loading
-ensure_model_downloaded()
-
-# Load YOLO and analyzer
+# ✅ Load YOLO and Analyzer
 model = YOLO(MODEL_PATH)
 analyzer = QueueAnalyzer(model)
 
-# Main logic
+# 🌐 Streamlit App
+st.set_page_config(page_title="Queue Monitor", layout="wide")
+st.title("🚶 Narva Queue Monitor")
+
 image = analyzer.fetch_image(CAMERA_URL)
 if image is not None:
     detections = analyzer.detect_pedestrians(image)
