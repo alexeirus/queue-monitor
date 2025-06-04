@@ -9,30 +9,28 @@ import ultralytics.nn.tasks
 import ultralytics.nn.modules
 import ultralytics.nn.modules.conv
 import ultralytics.nn.modules.block
+from torch.serialization import safe_globals
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
 
-# ✅ Optional SPPF registration
-try:
-    import ultralytics.nn.modules.common as ul_common
-    sppf = ul_common.SPPF
-except (ImportError, AttributeError):
-    sppf = None
-
-# ✅ Register required globals
-safe_globals = [
+# ✅ Build safe global list
+safe_global_list = [
     ultralytics.nn.tasks.DetectionModel,
-    ultralytics.nn.modules.Conv,                     # <- missing in previous versions
+    ultralytics.nn.modules.Conv,                     # ← legacy
     ultralytics.nn.modules.conv.Conv,
     ultralytics.nn.modules.conv.Concat,
     ultralytics.nn.modules.block.C2f,
     ultralytics.nn.modules.block.Bottleneck,
     torch.nn.modules.container.Sequential
 ]
-if sppf:
-    safe_globals.append(sppf)
 
-torch.serialization.add_safe_globals(safe_globals)
+# ✅ Optional SPPF registration
+try:
+    import ultralytics.nn.modules.common as ul_common
+    sppf = ul_common.SPPF
+    safe_global_list.append(sppf)
+except (ImportError, AttributeError):
+    sppf = None
 
 # ✅ Config
 MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
@@ -49,7 +47,7 @@ if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 10000000:
         for chunk in r.iter_content(chunk_size=8192):
             f.write(chunk)
 
-# ✅ Load model + analyzer inside safe context
+# ✅ Load model + analyzer inside safe deserialization context
 with safe_globals(safe_global_list):
     model = YOLO(MODEL_PATH)
     analyzer = QueueAnalyzer(model)
