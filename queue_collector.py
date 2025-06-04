@@ -13,31 +13,31 @@ from torch.serialization import safe_globals
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
 
-# ✅ Build safe global list
+# ✅ Optional SPPF registration
+try:
+    import ultralytics.nn.modules.common as ul_common
+    sppf = ul_common.SPPF
+except (ImportError, AttributeError):
+    sppf = None
+
+# ✅ Register all required globals using context manager
 safe_global_list = [
     ultralytics.nn.tasks.DetectionModel,
-    ultralytics.nn.modules.Conv,                     # ← legacy
+    ultralytics.nn.modules.Conv,
     ultralytics.nn.modules.conv.Conv,
     ultralytics.nn.modules.conv.Concat,
     ultralytics.nn.modules.block.C2f,
     ultralytics.nn.modules.block.Bottleneck,
     torch.nn.modules.container.Sequential
 ]
-
-# ✅ Optional SPPF registration
-try:
-    import ultralytics.nn.modules.common as ul_common
-    sppf = ul_common.SPPF
+if sppf:
     safe_global_list.append(sppf)
-except (ImportError, AttributeError):
-    sppf = None
 
-# ✅ Config
+timezone = "Europe/Tallinn"
+tz = pytz.timezone(timezone)
 MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
 MODEL_PATH = "yolov8s.pt"
 CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
-TIMEZONE = "Europe/Tallinn"
-tz = pytz.timezone(TIMEZONE)
 
 # 📥 Download YOLOv8s model if needed
 if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 10000000:
@@ -47,7 +47,7 @@ if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 10000000:
         for chunk in r.iter_content(chunk_size=8192):
             f.write(chunk)
 
-# ✅ Load model + analyzer inside safe deserialization context
+# ✅ Load model + analyzer inside safe context
 with safe_globals(safe_global_list):
     model = YOLO(MODEL_PATH)
     analyzer = QueueAnalyzer(model)
