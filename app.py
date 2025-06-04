@@ -7,9 +7,10 @@ import cv2
 import torch.serialization
 import torch.nn.modules.container
 import ultralytics.nn.tasks
-import ultralytics.nn.modules  # 👈 legacy path for Conv
+import ultralytics.nn.modules
 import ultralytics.nn.modules.conv
 import ultralytics.nn.modules.block
+from torch.serialization import safe_globals
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
 
@@ -20,10 +21,10 @@ try:
 except (ImportError, AttributeError):
     sppf = None
 
-# ✅ Register all necessary PyTorch globals BEFORE loading model
-safe_globals = [
+# ✅ Register all necessary PyTorch globals using context manager
+safe_global_list = [
     ultralytics.nn.tasks.DetectionModel,
-    ultralytics.nn.modules.Conv,  # ✅ legacy Conv path used in pretrained weights
+    ultralytics.nn.modules.Conv,
     ultralytics.nn.modules.conv.Conv,
     ultralytics.nn.modules.conv.Concat,
     ultralytics.nn.modules.block.C2f,
@@ -31,13 +32,7 @@ safe_globals = [
     torch.nn.modules.container.Sequential
 ]
 if sppf:
-    safe_globals.append(sppf)
-
-try:
-    torch.serialization.add_safe_globals(safe_globals)
-except ModuleNotFoundError as e:
-    st.error("Torch serialization failed. Check module availability.")
-    st.stop()
+    safe_global_list.append(sppf)
 
 # Config
 CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
@@ -54,9 +49,10 @@ if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 10000000:
         for chunk in r.iter_content(chunk_size=8192):
             f.write(chunk)
 
-# ✅ Load YOLO and Analyzer
-model = YOLO(MODEL_PATH)
-analyzer = QueueAnalyzer(model)
+# ✅ Load YOLO and Analyzer with safe globals
+with safe_globals(safe_global_list):
+    model = YOLO(MODEL_PATH)
+    analyzer = QueueAnalyzer(model)
 
 # 🌐 Streamlit App
 st.set_page_config(page_title="Queue Monitor", layout="wide")
