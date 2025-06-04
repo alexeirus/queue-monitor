@@ -9,7 +9,6 @@ import ultralytics.nn.tasks
 import ultralytics.nn.modules
 import ultralytics.nn.modules.conv
 import ultralytics.nn.modules.block
-from torch.serialization import safe_globals
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
 
@@ -20,10 +19,10 @@ try:
 except (ImportError, AttributeError):
     sppf = None
 
-# ✅ Register all required globals using context manager
-safe_global_list = [
+# ✅ Register required globals
+safe_globals = [
     ultralytics.nn.tasks.DetectionModel,
-    ultralytics.nn.modules.Conv,
+    ultralytics.nn.modules.Conv,                     # <- missing in previous versions
     ultralytics.nn.modules.conv.Conv,
     ultralytics.nn.modules.conv.Concat,
     ultralytics.nn.modules.block.C2f,
@@ -31,13 +30,16 @@ safe_global_list = [
     torch.nn.modules.container.Sequential
 ]
 if sppf:
-    safe_global_list.append(sppf)
+    safe_globals.append(sppf)
 
-timezone = "Europe/Tallinn"
-tz = pytz.timezone(timezone)
+torch.serialization.add_safe_globals(safe_globals)
+
+# ✅ Config
 MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
 MODEL_PATH = "yolov8s.pt"
 CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
+TIMEZONE = "Europe/Tallinn"
+tz = pytz.timezone(TIMEZONE)
 
 # 📥 Download YOLOv8s model if needed
 if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 10000000:
