@@ -1,16 +1,14 @@
-import streamlit as st
 import os
 import requests
+import time
 from datetime import datetime
 import pytz
-import cv2
 import torch.serialization
 import torch.nn.modules.container
 import ultralytics.nn.tasks
 import ultralytics.nn.modules
 import ultralytics.nn.modules.conv
 import ultralytics.nn.modules.block
-from torch.serialization import safe_globals
 from ultralytics import YOLO
 from queue_analyzer import QueueAnalyzer
 
@@ -21,10 +19,10 @@ try:
 except (ImportError, AttributeError):
     sppf = None
 
-# ✅ Register all necessary PyTorch globals using context manager
-safe_global_list = [
+# ✅ Register required globals
+safe_globals = [
     ultralytics.nn.tasks.DetectionModel,
-    ultralytics.nn.modules.Conv,
+    ultralytics.nn.modules.Conv,                     # <- missing in previous versions
     ultralytics.nn.modules.conv.Conv,
     ultralytics.nn.modules.conv.Concat,
     ultralytics.nn.modules.block.C2f,
@@ -32,12 +30,14 @@ safe_global_list = [
     torch.nn.modules.container.Sequential
 ]
 if sppf:
-    safe_global_list.append(sppf)
+    safe_globals.append(sppf)
 
-# Config
-CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
+torch.serialization.add_safe_globals(safe_globals)
+
+# ✅ Config
 MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
 MODEL_PATH = "yolov8s.pt"
+CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
 TIMEZONE = "Europe/Tallinn"
 tz = pytz.timezone(TIMEZONE)
 
