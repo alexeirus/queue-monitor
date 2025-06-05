@@ -5,7 +5,8 @@ import streamlit as st
 from datetime import datetime
 import pytz
 import pandas as pd
-import cv2 # Make sure you have OpenCV installed if you're processing images directly in app.py
+import cv2
+import numpy as np # Ensure numpy is imported for cv2.imdecode
 
 # It's good practice to ensure these imports are consistent if you need them for safe_globals in app.py too
 import torch.serialization
@@ -23,9 +24,18 @@ from queue_analyzer import QueueAnalyzer
 # ✅ Optional SPPF registration
 try:
     import ultralytics.nn.modules.common as ul_common
-    sppf = ul_common.SPmonmonF
+    sppf = ul_common.SPmonmonF # This was a typo: should be SPPF
 except (ImportError, AttributeError):
     sppf = None
+
+# Correcting the SPPF import if it was indeed 'SPmonmonF' - assuming it should be SPPF
+# Re-checking Ultralytics source, it's typically SPPF or C2f. If the model uses SPPF, this is correct.
+try:
+    from ultralytics.nn.modules.block import SPPF # Correct import for SPPF
+    sppf_module = SPPF
+except (ImportError, AttributeError):
+    sppf_module = None
+
 
 # ✅ Register required globals
 safe_globals = [
@@ -37,8 +47,8 @@ safe_globals = [
     ultralytics.nn.modules.block.Bottleneck,
     torch.nn.modules.container.Sequential
 ]
-if sppf:
-    safe_globals.append(sppf)
+if sppf_module: # Use the correctly imported SPPF module
+    safe_globals.append(sppf_module)
 
 torch.serialization.add_safe_globals(safe_globals)
 # --- End Safe Globals ---
@@ -56,7 +66,7 @@ QUEUE_HISTORY_CSV = 'queue_history.csv' # Define the CSV file path
 @st.cache_data
 def download_yolo_model(model_path, model_url):
     """Downloads the YOLOv8s model if it doesn't exist or is incomplete.
-       Cached with Streamlit to avoid re-downloading on every rerun.
+        Cached with Streamlit to avoid re-downloading on every rerun.
     """
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 10000000:
         st.warning(f"Downloading YOLOv8s model to {model_path}...")
@@ -83,20 +93,25 @@ def load_yolo_model(model_path):
         return None
 
 @st.cache_data(ttl=60) # Cache for 60 seconds to avoid constant re-reads
-def load_queue_history(csv_path):
-    """Loads and returns the queue history from CSV."""
+def load_queue_history_for_streamlit_display(csv_path):
+    """
+    Loads and returns the queue history from CSV for Streamlit display.
+    This function will be responsible for fetching the CSV from cloud storage later.
+    """
     if os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
         try:
-            # Ensure the timestamp column is parsed as datetime
             df = pd.read_csv(csv_path, parse_dates=['timestamp'], date_format='%Y-%m-%dT%H:%M:%S.%f')
-            # Set timestamp as index for easier time-based operations
             df['timestamp'] = df['timestamp'].dt.tz_localize('UTC').dt.tz_convert(TIMEZONE)
+            # Ensure 'count' column is present for plotting, rename 'count' to 'person_count' if necessary
+            # based on how queue_collector.py saves it. Assuming 'count' for now.
+            if 'count' in df.columns:
+                 df.rename(columns={'count': 'person_count'}, inplace=True)
             return df.set_index('timestamp')
         except pd.errors.EmptyDataError:
             st.warning("Queue history CSV is empty. Waiting for data from worker.")
             return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
         except Exception as e:
-            st.error(f"Error loading queue history CSV: {e}")
+            st.error(f"Error loading queue history CSV for display: {e}")
             return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
     else:
         st.info("Queue history CSV not found or is empty. Data will appear once the worker starts.")
@@ -123,16 +138,15 @@ st.title("🚶 Narva Queue Monitor")
 st.markdown("---")
 
 # Initialize Analyzer (only if model is loaded successfully)
-analyzer = None
+analyzer = None # Initialize analyzer to None
 
 # Download model only once (cached)
 if download_yolo_model(MODEL_PATH, MODEL_URL):
     # Load model only once (cached)
     model = load_yolo_model(MODEL_PATH)
     if model:
+        # QueueAnalyzer's __init__ will load history using its *internal* _load_history_from_csv
         analyzer = QueueAnalyzer(model)
-        # Ensure analyzer's history is loaded from the common CSV
-        analyzer.load_history_from_csv(QUEUE_HISTORY_CSV)
     else:
         st.warning("Model could not be loaded. Live detection features will be limited.")
 else:
@@ -143,8 +157,6 @@ st.header("Live Camera Feed")
 latest_image_placeholder = st.empty() # Placeholder for the image to allow dynamic updates
 
 # Fetch and display the image (and potentially draw detections)
-import numpy as np # Import numpy for cv2.imdecode
-
 image = fetch_latest_image(CAMERA_URL)
 if image is not None:
     timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
@@ -155,8 +167,6 @@ if image is not None:
         for (x1, y1, x2, y2) in detections:
             cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
         
-        # Get the latest adjusted count from the analyzer (which loaded from CSV)
-        # Or, if you want to show the 'live' detection count from this image:
         base_count_live = len(detections)
         adjusted_count_live = base_count_live + 50 if base_count_live > 0 else 0
         latest_image_placeholder.image(image, caption=f"Last updated: {timestamp} (Live Detections Shown)", channels="BGR", use_column_width=True)
@@ -171,8 +181,8 @@ st.markdown("---")
 # --- Display Historical Data and Predictions ---
 st.header("Queue History and Predictions")
 
-# Load queue history from the CSV
-queue_df = load_queue_history(QUEUE_HISTORY_CSV)
+# Load queue history for Streamlit display using the dedicated cached function
+queue_df = load_queue_history_for_streamlit_display(QUEUE_HISTORY_CSV)
 
 if not queue_df.empty:
     # Display the latest recorded count from history, which is updated by queue_collector.py
@@ -184,13 +194,12 @@ if not queue_df.empty:
     st.line_chart(queue_df['person_count'])
 
     # Predictions (assuming QueueAnalyzer can predict based on loaded history)
-    # Ensure analyzer is initialized before calling its methods
+    # The analyzer instance already has its history_df loaded during its __init__
     if analyzer:
-        # Before predicting, make sure the analyzer has the latest data.
-        # It's better to ensure QueueAnalyzer loads its history from the CSV
-        # when it's initialized or has a method to refresh it.
-        # For this example, assuming analyzer.predict_trend() and best_hours_to_cross()
-        # use the internal history which is now loaded from the CSV.
+        # Note: If the analyzer's history_df is not being kept up-to-date by the collector,
+        # its predictions will be based on a potentially stale history.
+        # This is where cloud storage will be crucial.
+        # For now, these methods will use the history loaded by QueueAnalyzer's init.
         st.info(analyzer.predict_trend())
         st.success(f"Best hours to cross: {analyzer.best_hours_to_cross()}")
     else:
