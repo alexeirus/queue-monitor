@@ -4,10 +4,7 @@ pillow
 pytz
 requests
 streamlit==1.45.1
-# Pin PyTorch to a version that includes add_safe_globals (2.6+)
-# and is compatible with Ultralytics 8.0.204
-torch==2.2.2  # Or 2.3.1 - 2.5.1 are also good candidates for this Ultralytics version
-torchvision==0.17.2 # Must match the torch minor version (e.g. 2.2.x -> 0.17.x)
-# Pin NumPy to a 1.x version to avoid the NumPy 2.x incompatibility warning/error
+torch==2.4.0  # Attempting a newer 2.x version
+torchvision==0.19.0 # Compatible with torch 2.4.x
 numpy==1.26.4
 ultralytics==8.0.204
