@@ -1,0 +1,9 @@
+libgl1
+libgl1-mesa-glx # More specific GL library
+libgstreamer-plugins-base1.0-0
+libgstreamer1.0-0
+libsm6
+libxext6
+libxrender1
+libfontconfig1
+libice6
