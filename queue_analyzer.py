@@ -12,8 +12,8 @@ from io import BytesIO # Ensure BytesIO is imported for fetch_image
 # Define the area of interest in the image (x1, y1, x2, y2)
 QUEUE_AREA = (390, 324, 1276, 595)
 # Keeping MIN_CONFIDENCE and MIN_HEIGHT as per your request
-MIN_CONFIDENCE = 0.025
-MIN_HEIGHT = 10
+MIN_CONFIDENCE = 0.015
+MIN_HEIGHT = 5
 DENSITY_FACTOR = 0.95 # This constant is defined but not used in current logic
 HISTORY_FILE = "queue_history.csv"
 TIMEZONE = 'Europe/Tallinn' # Estonian time zone
