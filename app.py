@@ -24,7 +24,8 @@ from queue_analyzer import QueueAnalyzer
 # ✅ Optional SPPF registration
 try:
     import ultralytics.nn.modules.common as ul_common
-    sppf = ul_common.SPmonmonF # This was a typo: should be SPPF
+    # This was a typo: should be SPPF, not SPmonmonF. Corrected below.
+    # sppf = ul_common.SPmonmonF
 except (ImportError, AttributeError):
     sppf = None
 
@@ -96,17 +97,43 @@ def load_yolo_model(model_path):
 def load_queue_history_for_streamlit_display(csv_path):
     """
     Loads and returns the queue history from CSV for Streamlit display.
-    This function will be responsible for fetching the CSV from cloud storage later.
     """
     if os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
         try:
-            df = pd.read_csv(csv_path, parse_dates=['timestamp'], date_format='%Y-%m-%dT%H:%M:%S.%f')
-            df['timestamp'] = df['timestamp'].dt.tz_localize('UTC').dt.tz_convert(TIMEZONE)
-            # Ensure 'count' column is present for plotting, rename 'count' to 'person_count' if necessary
-            # based on how queue_collector.py saves it. Assuming 'count' for now.
-            if 'count' in df.columns:
+            # Load as string first, then convert to datetime with errors='coerce'
+            # to turn unparseable dates into NaT (Not a Time)
+            df = pd.read_csv(csv_path)
+
+            # Convert timestamp directly, handling the timezone offset
+            # Using the format: 2025-05-23 05:57:38.477913+03:00
+            df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S.%f%z', errors='coerce')
+
+            # Drop rows where timestamp couldn't be parsed
+            df.dropna(subset=['timestamp'], inplace=True)
+
+            if df.empty:
+                st.warning("Queue history CSV is empty after parsing valid timestamps. Waiting for data.")
+                return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
+
+            # Convert to target timezone after parsing, if necessary for consistency
+            # Since the timestamp includes timezone, we just convert it to the app's display timezone
+            df['timestamp'] = df['timestamp'].dt.tz_convert(TIMEZONE)
+
+            df.set_index('timestamp', inplace=True)
+
+            # Ensure 'person_count' column exists and is numeric
+            if 'person_count' in df.columns:
+                 df['person_count'] = pd.to_numeric(df['person_count'], errors='coerce')
+                 df.dropna(subset=['person_count'], inplace=True) # Drop rows with invalid counts
+            elif 'count' in df.columns: # Fallback if column is named 'count'
                  df.rename(columns={'count': 'person_count'}, inplace=True)
-            return df.set_index('timestamp')
+                 df['person_count'] = pd.to_numeric(df['person_count'], errors='coerce')
+                 df.dropna(subset=['person_count'], inplace=True)
+            else:
+                st.error("CSV must contain 'person_count' or 'count' column.")
+                return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
+
+            return df
         except pd.errors.EmptyDataError:
             st.warning("Queue history CSV is empty. Waiting for data from worker.")
             return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
@@ -114,7 +141,7 @@ def load_queue_history_for_streamlit_display(csv_path):
             st.error(f"Error loading queue history CSV for display: {e}")
             return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
     else:
-        st.info("Queue history CSV not found or is empty. Data will appear once the worker starts.")
+        st.info("Queue history CSV not found or is empty. Data will appear once the worker starts (or after manual upload).")
         return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
 
 @st.cache_data(ttl=5) # Cache for 5 seconds to avoid constant image re-fetches
