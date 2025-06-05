@@ -51,7 +51,7 @@ if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 10000000:
             f.write(chunk)
 
 # ✅ Load YOLO and Analyzer with safe globals
-with safe_globals(safe_global_list):
+with safe_globals(safe_globals):
     model = YOLO(MODEL_PATH)
     analyzer = QueueAnalyzer(model)
 
