@@ -1,9 +1,9 @@
-streamlit
-ultralytics==8.0.204
 opencv-python-headless
-torch
 pandas
-numpy
 pillow
-requests
 pytz
+requests
+streamlit==1.45.1
+torch==2.1.2
+torchvision==0.16.2
+ultralytics==8.0.204
