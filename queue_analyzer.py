@@ -178,31 +178,40 @@ class QueueAnalyzer:
         return "Queue is stable →"
 
     def best_hours_to_cross(self) -> str:
-        """
-        Analyzes historical data to suggest the best hours to cross.
-        Returns a formatted string of recommended hours.
-        Original logic preserved.
-        """
-        if len(self.history_df) < 24: # Original condition
+        if len(self.history_df) < 24:
             return "Need more data"
-        
-        # Ensure 'timestamp' is datetime and has a timezone
-        # This check should ideally pass now if _load_history_from_csv works correctly
-        if not pd.api.types.is_datetime64_any_dtype(self.history_df.index): # Check index as timestamp is now the index
-            print("Warning: 'timestamp' column is not datetime. Attempting to re-localize.")
-            # If for some reason index isn't datetime, try to parse it (assuming it's a string representation)
-            temp_index = pd.to_datetime(self.history_df.index.astype(str), format='%Y-%m-%d %H:%M:%S.%f%z', errors='coerce')
-            temp_index = temp_index.tz_convert(self.tz)
+        # The timestamp conversion safety check should be handled by _load_history_from_gcs now,
+        # but leaving it for robustness if other data sources are introduced or issues arise.
+        if not pd.api.types.is_datetime64_any_dtype(self.history_df.index) or self.history_df.index.tz is None:
+            # This block can usually be removed if _load_history_from_gcs ensures correct dtype and tz
+            print("Warning: 'timestamp' index is not datetime with timezone. Attempting to localize.")
+            temp_index = pd.to_datetime(self.history_df.index.astype(str), errors='coerce')
+            temp_index = temp_index.tz_localize('UTC', errors='coerce').tz_convert(self.tz) # Assume UTC if no TZ, then convert
             self.history_df.index = temp_index
-            self.history_df.dropna(subset=[self.history_df.index.name], inplace=True) # Drop rows with invalid index
+            self.history_df.dropna(subset=[self.history_df.index.name], inplace=True)
             if self.history_df.empty:
-                return "Error: Timestamp data format issue for best hours."
+                return "Error: Timestamp index format issue for best hours."
 
-        # Group by hour using the datetime index directly
-        avg_by_hour = self.history_df.groupby(self.history_df.index.hour)["count"].mean()
-        
+        # Filter data to only include operating hours (7 AM to 11 PM inclusive in Europe/Tallinn)
+        # 7 AM is hour 7, 11 PM is hour 23
+        operating_hours_df = self.history_df[
+            (self.history_df.index.hour >= 7) &
+            (self.history_df.index.hour <= 23)
+        ]
+
+        if operating_hours_df.empty:
+            # This can happen if all historical data is outside operating hours
+            # or if there simply isn't enough data *within* operating hours
+            return "No sufficient data within operating hours to determine best times."
+
+        # Group by hour and calculate the mean queue count for only the operating hours
+        avg_by_hour = operating_hours_df.groupby(operating_hours_df.index.hour)["count"].mean()
+
         if avg_by_hour.empty:
-            return "No historical data to determine best hours."
+            return "No sufficient data within operating hours to determine best times."
 
+        # Get the top 3 hours with the lowest average queue count
         best_hours = avg_by_hour.sort_values().head(3).index.tolist()
+
+        # Format the output string
         return ", ".join(f"{h}:00-{h+1}:00" for h in best_hours)
