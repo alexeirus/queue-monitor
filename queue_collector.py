@@ -20,7 +20,7 @@ HISTORY_FILE = "queue_history.csv" # Still used for local temp storage
 TIMEZONE = 'Europe/Tallinn'
 
 # GCS Configuration
-GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "queue-monitor-writer-reader") # <--- REPLACE WITH YOUR BUCKET NAME
+GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "narva-queue-history-data") # <--- REPLACE WITH YOUR BUCKET NAME
 GCS_OBJECT_NAME = "queue_history.csv" # The name of the file in GCS
 
 # --- Model Configuration (same as in app.py) ---
