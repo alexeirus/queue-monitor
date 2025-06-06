@@ -6,7 +6,10 @@ from datetime import datetime
 import pytz
 import pandas as pd
 import cv2
-import numpy as np # Ensure numpy is imported for cv2.imdecode
+import numpy as np
+import base64 # Import base64 for decoding credentials
+from google.cloud import storage # Import GCS client
+from io import BytesIO # For reading CSV from bytes
 
 # It's good practice to ensure these imports are consistent if you need them for safe_globals in app.py too
 import torch.serialization
@@ -18,27 +21,16 @@ import ultralytics.nn.modules.block
 from ultralytics import YOLO
 
 # Import QueueAnalyzer - ensure queue_analyzer.py is accessible to app.py
-from queue_analyzer import QueueAnalyzer
+from queue_analyzer import QueueAnalyzer # Note: This QueueAnalyzer will still have its own _load_history_from_csv,
+                                       # but for app.py's display, we'll use a separate GCS download function.
 
-# --- Safe Globals for PyTorch (Necessary if app.py also loads the model) ---
-# ✅ Optional SPPF registration
+# --- Safe Globals for PyTorch ---
 try:
-    import ultralytics.nn.modules.common as ul_common
-    # This was a typo: should be SPPF, not SPmonmonF. Corrected below.
-    # sppf = ul_common.SPmonmonF
-except (ImportError, AttributeError):
-    sppf = None
-
-# Correcting the SPPF import if it was indeed 'SPmonmonF' - assuming it should be SPPF
-# Re-checking Ultralytics source, it's typically SPPF or C2f. If the model uses SPPF, this is correct.
-try:
-    from ultralytics.nn.modules.block import SPPF # Correct import for SPPF
+    from ultralytics.nn.modules.block import SPPF
     sppf_module = SPPF
 except (ImportError, AttributeError):
     sppf_module = None
 
-
-# ✅ Register required globals
 safe_globals = [
     ultralytics.nn.tasks.DetectionModel,
     ultralytics.nn.modules.Conv,
@@ -48,9 +40,8 @@ safe_globals = [
     ultralytics.nn.modules.block.Bottleneck,
     torch.nn.modules.container.Sequential
 ]
-if sppf_module: # Use the correctly imported SPPF module
+if sppf_module:
     safe_globals.append(sppf_module)
-
 torch.serialization.add_safe_globals(safe_globals)
 # --- End Safe Globals ---
 
@@ -60,12 +51,33 @@ MODEL_PATH = "yolov8s.pt"
 CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
 TIMEZONE = "Europe/Tallinn"
 tz = pytz.timezone(TIMEZONE)
-QUEUE_HISTORY_CSV = 'queue_history.csv' # Define the CSV file path
+
+# GCS Configuration for app.py
+GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "narva-queue-history-data") # <--- REPLACE WITH YOUR BUCKET NAME
+GCS_OBJECT_NAME = "queue_history.csv" # The name of the file in GCS
+
+
+# --- Helper function for GCS client (same as in queue_collector.py) ---
+def get_gcs_client_app():
+    creds_base64 = os.environ.get("GCS_CREDENTIALS_BASE64")
+    if creds_base64:
+        creds_json_str = base64.b64decode(creds_base64).decode('utf-8')
+        temp_creds_file = 'gcs_temp_creds_app.json' # Use a different temp file name
+        with open(temp_creds_file, 'w') as f:
+            f.write(creds_json_str)
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = temp_creds_file
+        client = storage.Client()
+        return client
+    else:
+        st.error("GCS_CREDENTIALS_BASE64 environment variable not found. GCS client cannot be initialized.")
+        return None
+
 
 # --- Helper Functions ---
 
 @st.cache_data
 def download_yolo_model(model_path, model_url):
+    # ... (no changes needed here, copy the original content)
     """Downloads the YOLOv8s model if it doesn't exist or is incomplete.
         Cached with Streamlit to avoid re-downloading on every rerun.
     """
@@ -83,8 +95,9 @@ def download_yolo_model(model_path, model_url):
             return False # Indicate download failure
     return True # Indicate download success
 
-@st.cache_resource # Use st.cache_resource for models/large objects
+@st.cache_resource
 def load_yolo_model(model_path):
+    # ... (no changes needed here, copy the original content)
     """Loads the YOLO model. Cached with Streamlit to load only once."""
     try:
         model = YOLO(model_path)
@@ -93,62 +106,57 @@ def load_yolo_model(model_path):
         st.error(f"Error loading YOLO model: {e}. Ensure the model file is valid.")
         return None
 
-@st.cache_data(ttl=60) # Cache for 60 seconds to avoid constant re-reads
-def load_queue_history_for_streamlit_display(csv_path):
+@st.cache_data(ttl=60) # Cache for 60 seconds to avoid constant re-downloads from GCS
+def load_queue_history_from_gcs_for_display():
     """
-    Loads and returns the queue history from CSV for Streamlit display.
+    Loads and returns the queue history from GCS for Streamlit display.
     """
-    if os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
+    gcs_client = get_gcs_client_app()
+    if not gcs_client:
+        return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
+
+    bucket = gcs_client.bucket(GCS_BUCKET_NAME)
+    blob = bucket.blob(GCS_OBJECT_NAME)
+
+    if blob.exists():
         try:
-            # Load as string first, then convert to datetime with errors='coerce'
-            # to turn unparseable dates into NaT (Not a Time)
-            df = pd.read_csv(csv_path)
+            csv_bytes = blob.download_as_bytes()
+            df = pd.read_csv(BytesIO(csv_bytes), dtype={'count': int}) # Ensure 'count' is read as int
 
-            # Convert timestamp directly, handling the timezone offset
-            # Using the format: 2025-05-23 05:57:38.477913+03:00
+            # Convert timestamp, handling timezone offset
             df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S.%f%z', errors='coerce')
-
-            # Drop rows where timestamp couldn't be parsed
             df.dropna(subset=['timestamp'], inplace=True)
-
-            if df.empty:
-                st.warning("Queue history CSV is empty after parsing valid timestamps. Waiting for data.")
-                return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
-
-            # Convert to target timezone after parsing, if necessary for consistency
-            # Since the timestamp includes timezone, we just convert it to the app's display timezone
             df['timestamp'] = df['timestamp'].dt.tz_convert(TIMEZONE)
-
             df.set_index('timestamp', inplace=True)
 
-            # Ensure 'person_count' column exists and is numeric
-            if 'person_count' in df.columns:
-                 df['person_count'] = pd.to_numeric(df['person_count'], errors='coerce')
-                 df.dropna(subset=['person_count'], inplace=True) # Drop rows with invalid counts
-            elif 'count' in df.columns: # Fallback if column is named 'count'
+            # Ensure 'person_count' column exists, rename 'count' to 'person_count' if necessary
+            if 'count' in df.columns:
                  df.rename(columns={'count': 'person_count'}, inplace=True)
-                 df['person_count'] = pd.to_numeric(df['person_count'], errors='coerce')
-                 df.dropna(subset=['person_count'], inplace=True)
-            else:
-                st.error("CSV must contain 'person_count' or 'count' column.")
-                return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
+            elif 'person_count' not in df.columns:
+                 st.error("CSV must contain 'person_count' or 'count' column.")
+                 return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
+            
+            df['person_count'] = pd.to_numeric(df['person_count'], errors='coerce')
+            df.dropna(subset=['person_count'], inplace=True)
 
             return df
         except pd.errors.EmptyDataError:
-            st.warning("Queue history CSV is empty. Waiting for data from worker.")
+            st.warning("Queue history GCS object is empty. Waiting for data from worker.")
             return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
         except Exception as e:
-            st.error(f"Error loading queue history CSV for display: {e}")
+            st.error(f"Error loading queue history from GCS for display: {e}")
             return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
     else:
-        st.info("Queue history CSV not found or is empty. Data will appear once the worker starts (or after manual upload).")
+        st.info("Queue history GCS object not found. Data will appear once the worker starts collecting.")
         return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
+
 
 @st.cache_data(ttl=5) # Cache for 5 seconds to avoid constant image re-fetches
 def fetch_latest_image(url):
+    # ... (no changes needed here, copy the original content)
     """Fetches the latest image from the camera URL."""
     try:
-        response = requests.get(url, timeout=10) # Added timeout for robustness
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
         image_array = cv2.imdecode(np.frombuffer(response.content, np.uint8), cv2.IMREAD_COLOR)
         return image_array
@@ -172,8 +180,18 @@ if download_yolo_model(MODEL_PATH, MODEL_URL):
     # Load model only once (cached)
     model = load_yolo_model(MODEL_PATH)
     if model:
-        # QueueAnalyzer's __init__ will load history using its *internal* _load_history_from_csv
-        analyzer = QueueAnalyzer(model)
+        # NOTE: QueueAnalyzer's __init__ will load history from its local CSV by default
+        # However, for prediction purposes, we will ensure it also uses the GCS data for its history_df
+        # This will be done by explicitly passing the GCS-loaded dataframe if available.
+        analyzer = QueueAnalyzer(model) # Initialize normally
+        # If GCS data is loaded, replace analyzer's history_df with it
+        # This ensures predictions use the *latest* data from GCS
+        gcs_history_df = load_queue_history_from_gcs_for_display() # This loads for display, but can be reused
+        if not gcs_history_df.empty:
+            analyzer.history_df = gcs_history_df.rename(columns={'person_count': 'count'}) # Ensure column name matches analyzer's expectation
+            # print(f"Analyzer history_df updated with {len(analyzer.history_df)} entries from GCS.") # For debugging
+        else:
+            st.info("Analyzer initialized, but no GCS history available for predictions yet.")
     else:
         st.warning("Model could not be loaded. Live detection features will be limited.")
 else:
@@ -208,11 +226,11 @@ st.markdown("---")
 # --- Display Historical Data and Predictions ---
 st.header("Queue History and Predictions")
 
-# Load queue history for Streamlit display using the dedicated cached function
-queue_df = load_queue_history_for_streamlit_display(QUEUE_HISTORY_CSV)
+# Load queue history for Streamlit display using the dedicated GCS function
+queue_df = load_queue_history_from_gcs_for_display()
 
 if not queue_df.empty:
-    # Display the latest recorded count from history, which is updated by queue_collector.py
+    # Display the latest recorded count from history
     latest_history_count = queue_df['person_count'].iloc[-1] if not queue_df.empty else 0
     st.metric("Latest Recorded People (from History)", int(latest_history_count))
 
@@ -221,21 +239,17 @@ if not queue_df.empty:
     st.line_chart(queue_df['person_count'])
 
     # Predictions (assuming QueueAnalyzer can predict based on loaded history)
-    # The analyzer instance already has its history_df loaded during its __init__
     if analyzer:
-        # Note: If the analyzer's history_df is not being kept up-to-date by the collector,
-        # its predictions will be based on a potentially stale history.
-        # This is where cloud storage will be crucial.
-        # For now, these methods will use the history loaded by QueueAnalyzer's init.
+        # Ensure the analyzer's history_df is up-to-date with GCS data for predictions
+        # (This was handled above during analyzer initialization now)
         st.info(analyzer.predict_trend())
         st.success(f"Best hours to cross: {analyzer.best_hours_to_cross()}")
     else:
         st.warning("Cannot provide predictions as QueueAnalyzer could not be initialized.")
 else:
-    st.info("No historical queue data available yet. Please wait for the `queue_collector.py` worker to generate data.")
+    st.info("No historical queue data available yet. Please wait for the `queue_collector.py` worker to generate data and upload it to GCS.")
 
 # --- Auto-refresh feature for Streamlit ---
-# This will rerun the script every few seconds to update the display
 st.markdown("---")
 refresh_interval_sec = st.slider("Auto-refresh interval (seconds)", 5, 30, 10)
 time.sleep(refresh_interval_sec)
