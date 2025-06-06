@@ -106,14 +106,24 @@ class QueueAnalyzer:
             try:
                 # Download blob content as bytes and read into pandas
                 csv_bytes = blob.download_as_bytes()
-                df = pd.read_csv(BytesIO(csv_bytes), dtype={'count': int})
-
+                # Remove dtype={'count': int} from read_csv
+                df = pd.read_csv(BytesIO(csv_bytes))
+        
                 # Convert timestamp, handling timezone offset
                 df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S.%f%z', errors='coerce')
                 df.dropna(subset=['timestamp'], inplace=True)
-                df['timestamp'] = df['timestamp'].dt.tz_convert(self.tz)
+        
+                # Ensure 'count' column exists before processing
+                if 'count' in df.columns:
+                    # Convert 'count' to numeric, coerce errors to NaN, fill NaN with 0, then convert to int
+                    df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0).astype(int)
+                else:
+                    # Handle case where 'count' column is missing, e.g., create it with zeros
+                    print("Warning: 'count' column not found in GCS history. Initializing with zeros.")
+                    df['count'] = 0  # Or handle appropriately for your app
+        
                 df.set_index('timestamp', inplace=True)
-
+        
                 print(f"Loaded {len(df)} entries from GCS: {GCS_OBJECT_NAME}")
                 return df
             except pd.errors.EmptyDataError:
@@ -125,7 +135,7 @@ class QueueAnalyzer:
         else:
             print(f"Info: GCS object {GCS_OBJECT_NAME} not found. Starting with a new history.")
             return pd.DataFrame(columns=["timestamp", "count", "day_of_week", "hour"]).set_index('timestamp')
-
+    
     def save_history(self):
         """Saves the current history DataFrame to GCS."""
         if not self.gcs_client:
