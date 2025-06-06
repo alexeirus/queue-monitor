@@ -8,3 +8,4 @@ torch==2.4.0  # Attempting a newer 2.x version
 torchvision==0.19.0 # Compatible with torch 2.4.x
 numpy==1.26.4
 ultralytics==8.0.204
+google-cloud-storage
