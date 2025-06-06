@@ -121,7 +121,8 @@ def load_queue_history_from_gcs_for_display():
     if blob.exists():
         try:
             csv_bytes = blob.download_as_bytes()
-            df = pd.read_csv(BytesIO(csv_bytes), dtype={'count': int}) # Ensure 'count' is read as int
+            # Remove dtype={'count': int} from read_csv
+            df = pd.read_csv(BytesIO(csv_bytes))
 
             # Convert timestamp, handling timezone offset
             df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S.%f%z', errors='coerce')
@@ -131,13 +132,17 @@ def load_queue_history_from_gcs_for_display():
 
             # Ensure 'person_count' column exists, rename 'count' to 'person_count' if necessary
             if 'count' in df.columns:
+                 # Convert 'count' to numeric, coerce errors to NaN, fill NaN with 0
+                 df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0)
                  df.rename(columns={'count': 'person_count'}, inplace=True)
-            elif 'person_count' not in df.columns:
-                 st.error("CSV must contain 'person_count' or 'count' column.")
-                 return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
-            
-            df['person_count'] = pd.to_numeric(df['person_count'], errors='coerce')
-            df.dropna(subset=['person_count'], inplace=True)
+            elif 'person_count' in df.columns:  # If it's already named person_count
+                 df['person_count'] = pd.to_numeric(df['person_count'], errors='coerce').fillna(0)
+            else:
+                st.error("CSV must contain 'person_count' or 'count' column. Initializing with zeros.")
+                df['person_count'] = 0  # Or handle as appropriate
+
+            # Finally, convert to integer
+            df['person_count'] = df['person_count'].astype(int)
 
             return df
         except pd.errors.EmptyDataError:
@@ -149,7 +154,6 @@ def load_queue_history_from_gcs_for_display():
     else:
         st.info("Queue history GCS object not found. Data will appear once the worker starts collecting.")
         return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
-
 
 @st.cache_data(ttl=5) # Cache for 5 seconds to avoid constant image re-fetches
 def fetch_latest_image(url):
