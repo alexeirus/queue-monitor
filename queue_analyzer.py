@@ -186,7 +186,7 @@ class QueueAnalyzer:
             # This block can usually be removed if _load_history_from_gcs ensures correct dtype and tz
             print("Warning: 'timestamp' index is not datetime with timezone. Attempting to localize.")
             temp_index = pd.to_datetime(self.history_df.index.astype(str), errors='coerce')
-            temp_index = temp_index.tz_localize('UTC', errors='coerce').tz_convert(self.tz) # Assume UTC if no TZ, then convert
+            temp_index = temp_index.tz_localize('UTC', errors='coerce').tz_convert(self.tz)  # Assume UTC if no TZ, then convert
             self.history_df.index = temp_index
             self.history_df.dropna(subset=[self.history_df.index.name], inplace=True)
             if self.history_df.empty:
@@ -196,7 +196,7 @@ class QueueAnalyzer:
         # 7 AM is hour 7, 11 PM is hour 23
         operating_hours_df = self.history_df[
             (self.history_df.index.hour >= 7) &
-            (self.history_df.index.hour <= 23)
+            (self.history_df.index.hour <= 22)  # Changed 23 to 22 to exclude the 23:00-24:00 hour
         ]
 
         if operating_hours_df.empty:
@@ -214,4 +214,4 @@ class QueueAnalyzer:
         best_hours = avg_by_hour.sort_values().head(3).index.tolist()
 
         # Format the output string
-        return ", ".join(f"{h}:00-{h+1}:00" for h in best_hours)
+        return ", ".join(f"{h}:00-{h + 1}:00" for h in best_hours)
