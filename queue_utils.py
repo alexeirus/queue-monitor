@@ -1,5 +1,5 @@
 import os
-import requests
+import requests # Needed here for model download in download_yolo_model
 import time
 from datetime import datetime
 import pytz
@@ -11,7 +11,7 @@ from google.cloud import storage
 from io import BytesIO
 from PIL import Image
 
-# It's good practice to ensure these imports are consistent
+# It's good practice to ensure these imports are consistent for Ultralytics
 import torch.serialization
 import torch.nn.modules.container
 import ultralytics.nn.tasks
@@ -20,30 +20,32 @@ import ultralytics.nn.modules.conv
 import ultralytics.nn.modules.block
 from ultralytics import YOLO
 
-# --- Configuration Constants (Moved here) ---
-QUEUE_AREA = (390, 324, 1276, 595)
-MIN_CONFIDENCE = 0.025
-MIN_HEIGHT = 10
-DENSITY_FACTOR = 0.95 # This is used by the collector, not directly for prediction
+# --- Configuration Constants ---
+QUEUE_AREA = (390, 324, 1276, 595) # (x1, y1, x2, y2) for the queue detection region
+MIN_CONFIDENCE = 0.25 # Minimum confidence score for YOLO detections
+MIN_HEIGHT = 10 # Minimum height of detected bounding box to consider as a person
+ADJUSTMENT_FACTOR = 50 # Example adjustment for count if base_count > 0.
+                        # This was a fixed +50 in your original code.
 TIMEZONE = 'Europe/Tallinn'
 tz = pytz.timezone(TIMEZONE)
 
 # GCS Configuration
 GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "narva-queue-history-data")
-GCS_OBJECT_NAME = "queue_history.csv"
-GCS_LIVE_IMAGE_OBJECT_NAME = "live_detection_feed.jpg" # New: for pre-processed image
+GCS_OBJECT_NAME = "queue_history.csv" # Stores historical count data
+GCS_LIVE_IMAGE_OBJECT_NAME = "live_detection_feed.jpg" # Stores the latest image with detections
 
 # Model Configuration
 MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
-MODEL_PATH = "yolov8s.pt"
-CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg"
+MODEL_PATH = "yolov8s.pt" # Local path where the model will be stored
+CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg" # URL for the live camera feed
 
-# --- Safe Globals for PyTorch (Moved here) ---
+# --- Safe Globals for PyTorch (Required by Ultralytics for safe loading) ---
+# This block ensures that torch.load can load specific Ultralytics model components.
 try:
     from ultralytics.nn.modules.block import SPPF
     sppf_module = SPPF
 except (ImportError, AttributeError):
-    sppf_module = None
+    sppf_module = None # SPPF might not always be present or accessible depending on version
 
 safe_globals = [
     ultralytics.nn.tasks.DetectionModel,
@@ -58,40 +60,53 @@ if sppf_module:
     safe_globals.append(sppf_module)
 torch.serialization.add_safe_globals(safe_globals)
 
-# --- Helper function for GCS client (Consolidated) ---
+
+# --- Helper function for GCS client ---
 def get_gcs_client():
+    """Initializes and returns a Google Cloud Storage client."""
     creds_base64 = os.environ.get("GCS_CREDENTIALS_BASE64")
     if creds_base64:
-        creds_json_str = base64.b64decode(creds_base64).decode('utf-8')
-        temp_creds_file = 'gcs_temp_creds.json'
-        with open(temp_creds_file, 'w') as f:
-            f.write(creds_json_str)
-        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = temp_creds_file
-        client = storage.Client()
-        return client
+        try:
+            creds_json_str = base64.b64decode(creds_base64).decode('utf-8')
+            # Create a temporary file for credentials as `storage.Client.from_service_account_info`
+            # or `storage.Client()` when GOOGLE_APPLICATION_CREDENTIALS is set expect a path.
+            temp_creds_file = '/tmp/gcs_temp_creds.json' # Use /tmp for Render's ephemeral storage
+            with open(temp_creds_file, 'w') as f:
+                f.write(creds_json_str)
+            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = temp_creds_file
+            client = storage.Client()
+            print("GCS client initialized successfully.")
+            return client
+        except Exception as e:
+            print(f"Error initializing GCS client from GCS_CREDENTIALS_BASE64: {e}")
+            return None
     else:
         print("GCS_CREDENTIALS_BASE64 environment variable not found. GCS client cannot be initialized.")
         return None
 
-# --- Helper to download YOLO model (moved here, called by collector) ---
+# --- Helper to download YOLO model ---
 def download_yolo_model(model_path, model_url):
     """Downloads the YOLOv8s model if it doesn't exist or is incomplete."""
-    if not os.path.exists(model_path) or os.path.getsize(model_path) < 10000000:
+    if not os.path.exists(model_path) or os.path.getsize(model_path) < 10000000: # Check size to ensure it's not a partial download
         print(f"Downloading YOLOv8s model to {model_path}...")
         try:
             r = requests.get(model_url, stream=True)
-            r.raise_for_status()
+            r.raise_for_status() # Raise an exception for bad status codes
             with open(model_path, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
             print("YOLOv8s model downloaded successfully.")
+            return True
         except requests.exceptions.RequestException as e:
             print(f"Error downloading model: {e}. Please check the URL or network connection.")
             return False
+    print(f"YOLOv8s model already exists at {model_path}.")
     return True
 
 # --- QueueAnalyzer Class ---
 class QueueAnalyzer:
+    """Manages queue data collection, detection, and prediction."""
+
     def __init__(self, model):
         self.model = model
         self.tz = pytz.timezone(TIMEZONE)
@@ -99,8 +114,7 @@ class QueueAnalyzer:
         self.history_df = self._load_history_from_gcs()
 
     def _load_history_from_gcs(self):
-        # ... (Your existing _load_history_from_gcs function, no changes needed)
-        # Ensure the dtype conversion is robust here:
+        """Loads queue history from GCS."""
         if not self.gcs_client:
             print("GCS client not initialized. Cannot load history from GCS.")
             return pd.DataFrame(columns=["timestamp", "count", "day_of_week", "hour"]).set_index('timestamp')
@@ -114,7 +128,7 @@ class QueueAnalyzer:
                 df = pd.read_csv(BytesIO(csv_bytes))
 
                 df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S.%f%z', errors='coerce')
-                df.dropna(subset=['timestamp'], inplace=True)
+                df.dropna(subset=['timestamp'], inplace=True) # Drop rows where timestamp parsing failed
 
                 if 'count' in df.columns:
                     df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0).astype(int)
@@ -122,6 +136,8 @@ class QueueAnalyzer:
                     print("Warning: 'count' column not found in GCS history. Initializing with zeros.")
                     df['count'] = 0
 
+                # Ensure timestamp is timezone-aware and set as index
+                df['timestamp'] = df['timestamp'].dt.tz_convert(self.tz)
                 df.set_index('timestamp', inplace=True)
                 print(f"Loaded {len(df)} entries from GCS: {GCS_OBJECT_NAME}")
                 return df
@@ -136,7 +152,7 @@ class QueueAnalyzer:
             return pd.DataFrame(columns=["timestamp", "count", "day_of_week", "hour"]).set_index('timestamp')
 
     def save_history(self):
-        # ... (Your existing save_history function, no changes needed)
+        """Saves current queue history to GCS."""
         if not self.gcs_client:
             print("GCS client not initialized. Cannot save history to GCS.")
             return
@@ -146,12 +162,13 @@ class QueueAnalyzer:
 
         try:
             df_to_save = self.history_df.copy()
+            # Convert to UTC before saving to ensure consistency across timezones/systems
             if df_to_save.index.tz is not None:
                 df_to_save.index = df_to_save.index.tz_convert('UTC')
             
             csv_buffer = BytesIO()
             df_to_save.to_csv(csv_buffer, index=True, index_label='timestamp')
-            csv_buffer.seek(0)
+            csv_buffer.seek(0) # Rewind to the beginning of the buffer
 
             blob.upload_from_file(csv_buffer, content_type='text/csv')
             print(f"History saved to GCS: {GCS_OBJECT_NAME}")
@@ -159,7 +176,7 @@ class QueueAnalyzer:
             print(f"Error saving history to GCS: {e}")
 
     def update_history(self, count: int):
-        # ... (Your existing update_history function, no changes needed)
+        """Adds a new count entry to history and saves it."""
         now = datetime.now(self.tz)
         new_entry_df = pd.DataFrame([{
             "timestamp": now,
@@ -171,21 +188,24 @@ class QueueAnalyzer:
         self.history_df = pd.concat([self.history_df, new_entry_df], ignore_index=False)
         self.save_history()
 
-    def fetch_image(self, url: str):
-        # ... (Your existing fetch_image function, no changes needed)
+    # NOTE: fetch_image logic is not needed within QueueAnalyzer if the collector
+    # directly fetches the full image and passes it for detection.
+    # The QueueAnalyzer's role is detection and history management.
+    # However, keeping it as a method if other parts might need it.
+    def fetch_image(self, url: str) -> np.ndarray | None:
+        """Fetches and processes an image from a URL, crops it to QUEUE_AREA."""
         try:
             response = requests.get(url, timeout=10)
             response.raise_for_status()
             img = Image.open(BytesIO(response.content))
             img_np = np.array(img)
+            # Handle potential RGBA images, convert to BGR for OpenCV
             if img_np.ndim == 3 and img_np.shape[2] == 4:
                 img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGBA2BGR)
             else:
                 img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
 
-            # NOTE: For collector, we only crop the image for detection.
-            # The app.py will fetch the full image if it needs to display it,
-            # or fetch a pre-drawn image from GCS if the collector saves one.
+            # Return the cropped image for detection
             cropped_img = img_cv[QUEUE_AREA[1]:QUEUE_AREA[3], QUEUE_AREA[0]:QUEUE_AREA[2]]
             return cropped_img
         except requests.exceptions.RequestException as e:
@@ -195,35 +215,26 @@ class QueueAnalyzer:
             print(f"Error processing image from {url}: {e}")
             return None
 
-    def detect_pedestrians(self, image: np.ndarray):
-        # ... (Your existing detect_pedestrians function, no changes needed)
+    def detect_pedestrians(self, image: np.ndarray) -> list[tuple]:
+        """Performs pedestrian detection on the given image using the YOLO model."""
         if image is None:
             return []
-        # Note: YOLOv8 model inference takes RGB images implicitly, but OpenCV loads BGR by default.
-        # Ultralytics handles this conversion internally for you when passing a BGR numpy array.
-        results = self.model(image, classes=0, conf=MIN_CONFIDENCE, imgsz=640, verbose=False) # classes=0 for person
+        
+        # Use classes=0 for 'person' in COCO dataset (YOLOv8 default)
+        results = self.model(image, classes=0, conf=MIN_CONFIDENCE, imgsz=640, verbose=False)
         detections = []
         for result in results:
             for box in result.boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 height = y2 - y1
-                # The ROI check was based on binary thresholding, which might not be strictly needed for YOLOv8
-                # If YOLOv8 is already accurate, this extra step might be removed.
                 if height > MIN_HEIGHT:
-                    # Original ROI check logic - keep for now if it helps filter
-                    # This part could be simplified if YOLOv8's confidence is enough
-                    # gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) # This means converting again for each detection
-                    # thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                    #                                cv2.THRESH_BINARY_INV, 11, 2)
-                    # roi = thresh[y1:y2, x1:x2]
-                    # if np.sum(roi) > 0.05 * 255 * roi.size:
                     detections.append((x1, y1, x2, y2))
         return detections
 
     def predict_trend(self) -> str:
-        # ... (Your existing predict_trend function, no changes needed)
-        if len(self.history_df) < 4:
-            return "Insufficient data"
+        """Predicts the queue trend based on recent history."""
+        if len(self.history_df) < 4: # Need at least 4 data points for a trend
+            return "Insufficient data to determine trend."
         recent = self.history_df.tail(4)["count"].values
         delta = recent[-1] - recent[0]
         if delta > 5:
@@ -237,20 +248,25 @@ class QueueAnalyzer:
         return "Queue is stable →"
 
     def best_hours_to_cross(self) -> str:
-        # ... (Your existing best_hours_to_cross function, no changes needed)
-        if len(self.history_df) < 24:
-            return "Need more data"
-        if not pd.api.types.is_datetime64_any_dtype(self.history_df.index):
-            print("Warning: 'timestamp' column is not datetime. Attempting to re-localize.")
-            temp_index = pd.to_datetime(self.history_df.index.astype(str), format='%Y-%m-%d %H:%M:%S.%f%z', errors='coerce')
-            temp_index = temp_index.tz_convert(self.tz)
+        """Determines the best hours to cross based on historical averages."""
+        if len(self.history_df) < 24: # Need at least a day's worth of data for good hourly averages
+            return "Need more historical data to determine best hours."
+
+        # Ensure index is datetime and timezone-aware before grouping by hour
+        if not pd.api.types.is_datetime64_any_dtype(self.history_df.index) or self.history_df.index.tz is None:
+            print("Warning: history_df index not datetime or timezone-aware for best_hours_to_cross. Attempting to fix.")
+            # This logic should ideally be handled by _load_history_from_gcs, but good to have a fallback
+            temp_index = pd.to_datetime(self.history_df.index.astype(str), errors='coerce')
+            temp_index = temp_index.tz_localize('UTC').tz_convert(self.tz) # Assume UTC if no TZ, then convert
             self.history_df.index = temp_index
             self.history_df.dropna(subset=[self.history_df.index.name], inplace=True)
             if self.history_df.empty:
-                return "Error: Timestamp data format issue for best hours."
+                return "Error: Timestamp data format issue preventing best hours calculation."
 
         avg_by_hour = self.history_df.groupby(self.history_df.index.hour)["count"].mean()
         if avg_by_hour.empty:
             return "No historical data to determine best hours."
+        
+        # Get the top 3 hours with the lowest average count
         best_hours = avg_by_hour.sort_values().head(3).index.tolist()
-        return ", ".join(f"{h}:00-{h+1}:00" for h in best_hours)
+        return ", ".join(f"{h:02d}:00-{h+1:02d}:00" for h in best_hours)
