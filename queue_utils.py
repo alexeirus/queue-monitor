@@ -33,6 +33,9 @@ MIN_CONFIDENCE = 0.025 # Minimum confidence score for YOLO detections
 MIN_HEIGHT = 10 # Minimum height of detected bounding box to consider as a person
 ADJUSTMENT_FACTOR = 50 # Example adjustment for count if base_count > 0.
                         # This was a fixed +50 in your original code.
+TIMEZONE = 'Europe/Tallinn'       # <--- THIS LINE MUST BE PRESENT AND EXACTLY LIKE THIS
+# REMOVED: tz = pytz.timezone(TIMEZONE) # <--- THIS LINE SHOULD STILL BE GONE
+
 
 # GCS Configuration
 GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "narva-queue-history-data")
@@ -113,7 +116,7 @@ class QueueAnalyzer:
 
     def __init__(self, model):
         self.model = model
-        self.tz = pytz.timezone(TIMEZONE)
+        self.tz = pytz.timezone(TIMEZONE) # This line should now find TIMEZONE
         self.gcs_client = get_gcs_client()
         self.history_df = self._load_history_from_gcs()
 
