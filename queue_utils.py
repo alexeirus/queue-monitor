@@ -28,7 +28,7 @@ from PIL import Image
 from ultralytics import YOLO
 
 # --- Configuration Constants ---
-QUEUE_AREA = (700, 324, 1276, 595) # (x1, y1, x2, y2) for the queue detection region
+QUEUE_AREA = (390, 324, 1276, 595) # (x1, y1, x2, y2) for the queue detection region
 MIN_CONFIDENCE = 0.025 # Minimum confidence score for YOLO detections
 MIN_HEIGHT = 10 # Minimum height of detected bounding box to consider as a person
 ADJUSTMENT_FACTOR = 50 # Example adjustment for count if base_count > 0.
