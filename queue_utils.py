@@ -1,8 +1,8 @@
 import os
-import requests # Needed here for model download in download_yolo_model
+import requests
 import time
 from datetime import datetime
-import pytz
+import pytz # Keep this import
 import pandas as pd
 import cv2
 import numpy as np
@@ -29,12 +29,10 @@ from ultralytics import YOLO
 
 # --- Configuration Constants ---
 QUEUE_AREA = (390, 324, 1276, 595) # (x1, y1, x2, y2) for the queue detection region
-MIN_CONFIDENCE = 0.25 # Minimum confidence score for YOLO detections
+MIN_CONFIDENCE = 0.025 # Minimum confidence score for YOLO detections
 MIN_HEIGHT = 10 # Minimum height of detected bounding box to consider as a person
 ADJUSTMENT_FACTOR = 50 # Example adjustment for count if base_count > 0.
                         # This was a fixed +50 in your original code.
-TIMEZONE = 'Europe/Tallinn'
-tz = pytz.timezone(TIMEZONE)
 
 # GCS Configuration
 GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "narva-queue-history-data")
