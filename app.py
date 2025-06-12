@@ -6,21 +6,25 @@ import pandas as pd
 import cv2
 import numpy as np
 from io import BytesIO
+import pytz # Your existing import
+
+# --- ADD THIS LINE FOR DIAGNOSIS ---
+print(f"DEBUG: pytz object after import: {pytz}")
+# ------------------------------------
 
 # Import necessary components from queue_utils
 from queue_utils import (
-    get_gcs_client, # Re-use the consolidated GCS client function
+    get_gcs_client,
     GCS_BUCKET_NAME,
     GCS_OBJECT_NAME,
-    GCS_LIVE_IMAGE_OBJECT_NAME, # For fetching pre-processed image
+    GCS_LIVE_IMAGE_OBJECT_NAME,
     TIMEZONE,
-    CAMERA_URL, # Used as fallback if no pre-processed image
-    QueueAnalyzer # Import QueueAnalyzer for its prediction methods
+    CAMERA_URL,
+    QueueAnalyzer
 )
 
 # Initialize timezone from queue_utils
-tz = pytz.timezone(TIMEZONE)
-
+tz = pytz.timezone(TIMEZONE) # This is line 22
 # --- Helper Functions for Streamlit App ---
 
 @st.cache_data(ttl=5) # Cache for 5 seconds to avoid constant image re-fetches
