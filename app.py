@@ -1,14 +1,10 @@
 import os
-import requests
 import time
 import streamlit as st
 from datetime import datetime
-import pytz
 import pandas as pd
 import cv2
 import numpy as np
-import base64
-from google.cloud import storage
 from io import BytesIO
 
 # Import necessary components from queue_utils
@@ -16,27 +12,21 @@ from queue_utils import (
     get_gcs_client, # Re-use the consolidated GCS client function
     GCS_BUCKET_NAME,
     GCS_OBJECT_NAME,
-    GCS_LIVE_IMAGE_OBJECT_NAME, # New: for fetching pre-processed image
+    GCS_LIVE_IMAGE_OBJECT_NAME, # For fetching pre-processed image
     TIMEZONE,
-    CAMERA_URL, # Original camera URL is still needed if fetching raw image
+    CAMERA_URL, # Used as fallback if no pre-processed image
     QueueAnalyzer # Import QueueAnalyzer for its prediction methods
 )
 
-# Initialize timezone
+# Initialize timezone from queue_utils
 tz = pytz.timezone(TIMEZONE)
-
-# --- Helper function for GCS client (consolidated in queue_utils) ---
-def get_gcs_client_app(): # Renamed to avoid direct conflict, but functionally same as queue_utils.get_gcs_client
-    return get_gcs_client() # Call the centralized function
 
 # --- Helper Functions for Streamlit App ---
 
-# @st.cache_data(ttl=5) # Cache for 5 seconds to avoid constant image re-fetches
-# REMOVED: fetch_latest_image - now fetching pre-processed image
 @st.cache_data(ttl=5) # Cache for 5 seconds to avoid constant image re-fetches
 def fetch_live_detection_image_from_gcs():
     """Fetches the latest pre-processed image with detections from GCS."""
-    gcs_client = get_gcs_client_app()
+    gcs_client = get_gcs_client() # Use the centralized GCS client function
     if not gcs_client:
         st.error("GCS_CREDENTIALS_BASE64 environment variable not found. GCS client cannot be initialized for image fetch.")
         return None
@@ -47,6 +37,7 @@ def fetch_live_detection_image_from_gcs():
     if blob.exists():
         try:
             image_bytes = blob.download_as_bytes()
+            # Use cv2.imdecode to read image bytes into a numpy array
             image_array = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
             return image_array
         except Exception as e:
@@ -56,13 +47,10 @@ def fetch_live_detection_image_from_gcs():
         st.info(f"Live detection image '{GCS_LIVE_IMAGE_OBJECT_NAME}' not found in GCS. Waiting for collector.")
         return None
 
-
 @st.cache_data(ttl=60) # Cache for 60 seconds to avoid constant re-downloads from GCS
 def load_queue_history_from_gcs_for_display():
-    # ... (Your existing load_queue_history_from_gcs_for_display function, minor adjustment)
-    # Ensure this function correctly handles the column name 'count' vs 'person_count'
-    # as the collector saves 'count' and app expects 'person_count' for display.
-    gcs_client = get_gcs_client_app()
+    """Loads queue history from GCS for display in Streamlit."""
+    gcs_client = get_gcs_client() # Use the centralized GCS client function
     if not gcs_client:
         return pd.DataFrame(columns=['timestamp', 'person_count']).set_index('timestamp')
 
@@ -74,11 +62,13 @@ def load_queue_history_from_gcs_for_display():
             csv_bytes = blob.download_as_bytes()
             df = pd.read_csv(BytesIO(csv_bytes))
 
+            # Ensure timestamp is parsed correctly and converted to the desired timezone
             df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S.%f%z', errors='coerce')
             df.dropna(subset=['timestamp'], inplace=True)
             df['timestamp'] = df['timestamp'].dt.tz_convert(TIMEZONE)
             df.set_index('timestamp', inplace=True)
 
+            # Standardize column name to 'person_count' for display
             if 'count' in df.columns:
                 df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0)
                 df.rename(columns={'count': 'person_count'}, inplace=True)
@@ -107,16 +97,14 @@ st.set_page_config(page_title="Narva Queue Monitor", layout="wide", initial_side
 st.title("🚶 Narva Queue Monitor")
 st.markdown("---")
 
-# Initialize analyzer for prediction methods only (model not loaded here)
-# We pass None for the model, as it's not used for display predictions,
-# and the history_df will be explicitly updated from GCS.
-analyzer = QueueAnalyzer(None) # Pass None for model, as app.py doesn't do detection
+# Initialize analyzer for prediction methods only (model not loaded here, pass None)
+analyzer = QueueAnalyzer(None) # Pass None for model as app.py doesn't do detection
 
 # --- Display Latest Camera Image ---
 st.header("Live Camera Feed")
 latest_image_placeholder = st.empty()
 
-# Fetch and display the pre-processed image
+# Fetch and display the pre-processed image from GCS
 image_with_detections = fetch_live_detection_image_from_gcs()
 
 if image_with_detections is not None:
@@ -124,11 +112,10 @@ if image_with_detections is not None:
 
     # Display image with detections (already drawn by collector)
     latest_image_placeholder.image(image_with_detections,
-                                    caption=f"Last updated: {timestamp_display} (Live Detections Shown by Collector)",
-                                    channels="BGR", use_container_width=True) # FIX: use_container_width
+                                   caption=f"Last updated: {timestamp_display} (Live Detections Shown by Collector)",
+                                   channels="BGR", use_container_width=True)
 
-    # Display detected people count from the *latest entry in history* or from a separate live count file
-    # For now, let's derive it from the latest history entry, assuming the collector updates it frequently.
+    # Display detected people count from the *latest entry in history*
     queue_df_for_live_count = load_queue_history_from_gcs_for_display()
     if not queue_df_for_live_count.empty:
         latest_live_count = queue_df_for_live_count['person_count'].iloc[-1]
@@ -137,16 +124,21 @@ if image_with_detections is not None:
         st.info("Waiting for live detection count from collector.")
 
 else:
-    # Fallback if no pre-processed image is available
-    st.info("Live detection image is not yet available from the collector. Displaying raw feed if possible.")
-    raw_image = requests.get(CAMERA_URL, timeout=10)
-    if raw_image.status_code == 200:
-        raw_image_array = cv2.imdecode(np.frombuffer(raw_image.content, np.uint8), cv2.IMREAD_COLOR)
+    # Fallback if no pre-processed image is available from GCS (e.g., collector not running yet)
+    st.info("Live detection image is not yet available from the collector. Attempting to display raw feed.")
+    try:
+        # Use requests directly here as a fallback
+        import requests # Import requests for this specific fallback use case
+        raw_image_response = requests.get(CAMERA_URL, timeout=10)
+        raw_image_response.raise_for_status()
+        raw_image_array = cv2.imdecode(np.frombuffer(raw_image_response.content, np.uint8), cv2.IMREAD_COLOR)
         timestamp_display = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
         latest_image_placeholder.image(raw_image_array, caption=f"Last updated: {timestamp_display} (Raw Feed, No Detections)",
-                                       channels="BGR", use_container_width=True) # FIX: use_container_width
-    else:
-        latest_image_placeholder.error("⚠️ Could not load image from camera feed or GCS.")
+                                       channels="BGR", use_container_width=True)
+    except requests.exceptions.RequestException as e:
+        latest_image_placeholder.error(f"⚠️ Could not load image from camera feed or GCS: {e}")
+    except Exception as e:
+        latest_image_placeholder.error(f"⚠️ Error processing raw image: {e}")
 
 st.markdown("---")
 
@@ -161,7 +153,7 @@ if not queue_df.empty:
     st.metric("Latest Recorded People (from History)", int(latest_history_count))
 
     st.subheader("Queue Trends Over Time")
-    st.line_chart(queue_df['person_count'], use_container_width=True) # FIX: use_container_width
+    st.line_chart(queue_df['person_count'], use_container_width=True)
 
     # Update analyzer's history_df with the GCS data for predictions
     # Ensure column name matches analyzer's expectation ('count')
@@ -174,7 +166,6 @@ else:
 
 # --- Auto-refresh feature for Streamlit ---
 st.markdown("---")
-# FIX: use_column_width warnings - change to use_container_width where applicable in the layout (e.g. st.line_chart, st.image)
 refresh_interval_sec = st.slider("Auto-refresh interval (seconds)", 5, 30, 10)
 time.sleep(refresh_interval_sec)
 st.rerun()
