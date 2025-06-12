@@ -12,12 +12,19 @@ from io import BytesIO
 from PIL import Image
 
 # It's good practice to ensure these imports are consistent for Ultralytics
-import torch.serialization
-import torch.nn.modules.container
-import ultralytics.nn.tasks
-import ultralytics.nn.modules
-import ultralytics.nn.modules.conv
-import ultralytics.nn.modules.block
+# The 'torch.serialization' imports are only necessary if you are
+# explicitly calling torch.load with weights_only=False and need to
+# allowlist custom classes. For standard YOLO model loading, these
+# are often not strictly needed unless Ultralytics's internal mechanism
+# specifically relies on them for older model formats.
+# Given the error, we're removing the problematic `add_safe_globals` call.
+# import torch.serialization
+# import torch.nn.modules.container
+# import ultralytics.nn.tasks
+# import ultralytics.nn.modules
+# import ultralytics.nn.modules.conv
+# import ultralytics.nn.modules.block
+
 from ultralytics import YOLO
 
 # --- Configuration Constants ---
@@ -39,26 +46,27 @@ MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
 MODEL_PATH = "yolov8s.pt" # Local path where the model will be stored
 CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg" # URL for the live camera feed
 
-# --- Safe Globals for PyTorch (Required by Ultralytics for safe loading) ---
-# This block ensures that torch.load can load specific Ultralytics model components.
-try:
-    from ultralytics.nn.modules.block import SPPF
-    sppf_module = SPPF
-except (ImportError, AttributeError):
-    sppf_module = None # SPPF might not always be present or accessible depending on version
-
-safe_globals = [
-    ultralytics.nn.tasks.DetectionModel,
-    ultralytics.nn.modules.Conv,
-    ultralytics.nn.modules.conv.Conv,
-    ultralytics.nn.modules.conv.Concat,
-    ultralytics.nn.modules.block.C2f,
-    ultralytics.nn.modules.block.Bottleneck,
-    torch.nn.modules.container.Sequential
-]
-if sppf_module:
-    safe_globals.append(sppf_module)
-torch.serialization.add_safe_globals(safe_globals)
+# --- Safe Globals for PyTorch (REMOVED: The `add_safe_globals` call, as it's causing AttributeError) ---
+# This block is commented out/removed because `torch.serialization.add_safe_globals`
+# is not available in recent PyTorch versions, leading to AttributeError.
+# The YOLO model loading should work without it.
+# try:
+#     from ultralytics.nn.modules.block import SPPF
+#     sppf_module = SPPF
+# except (ImportError, AttributeError):
+#     sppf_module = None
+# safe_globals = [
+#     ultralytics.nn.tasks.DetectionModel,
+#     ultralytics.nn.modules.Conv,
+#     ultralytics.nn.modules.conv.Conv,
+#     ultralytics.nn.modules.conv.Concat,
+#     ultralytics.nn.modules.block.C2f,
+#     ultralytics.nn.modules.block.Bottleneck,
+#     torch.nn.modules.container.Sequential
+# ]
+# if sppf_module:
+#     safe_globals.append(sppf_module)
+# torch.serialization.add_safe_globals(safe_globals)
 
 
 # --- Helper function for GCS client ---
@@ -68,9 +76,7 @@ def get_gcs_client():
     if creds_base64:
         try:
             creds_json_str = base64.b64decode(creds_base64).decode('utf-8')
-            # Create a temporary file for credentials as `storage.Client.from_service_account_info`
-            # or `storage.Client()` when GOOGLE_APPLICATION_CREDENTIALS is set expect a path.
-            temp_creds_file = '/tmp/gcs_temp_creds.json' # Use /tmp for Render's ephemeral storage
+            temp_creds_file = '/tmp/gcs_temp_creds.json'
             with open(temp_creds_file, 'w') as f:
                 f.write(creds_json_str)
             os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = temp_creds_file
@@ -188,10 +194,6 @@ class QueueAnalyzer:
         self.history_df = pd.concat([self.history_df, new_entry_df], ignore_index=False)
         self.save_history()
 
-    # NOTE: fetch_image logic is not needed within QueueAnalyzer if the collector
-    # directly fetches the full image and passes it for detection.
-    # The QueueAnalyzer's role is detection and history management.
-    # However, keeping it as a method if other parts might need it.
     def fetch_image(self, url: str) -> np.ndarray | None:
         """Fetches and processes an image from a URL, crops it to QUEUE_AREA."""
         try:
@@ -255,7 +257,6 @@ class QueueAnalyzer:
         # Ensure index is datetime and timezone-aware before grouping by hour
         if not pd.api.types.is_datetime64_any_dtype(self.history_df.index) or self.history_df.index.tz is None:
             print("Warning: history_df index not datetime or timezone-aware for best_hours_to_cross. Attempting to fix.")
-            # This logic should ideally be handled by _load_history_from_gcs, but good to have a fallback
             temp_index = pd.to_datetime(self.history_df.index.astype(str), errors='coerce')
             temp_index = temp_index.tz_localize('UTC').tz_convert(self.tz) # Assume UTC if no TZ, then convert
             self.history_df.index = temp_index
