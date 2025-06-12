@@ -8,7 +8,7 @@ import numpy as np
 from io import BytesIO
 import pytz # Your existing import
 
-# --- ADD THIS LINE FOR DIAGNOSIS ---
+# --- MAKE SURE THIS LINE IS PRESENT ---
 print(f"DEBUG: pytz object after import: {pytz}")
 # ------------------------------------
 
@@ -24,7 +24,8 @@ from queue_utils import (
 )
 
 # Initialize timezone from queue_utils
-tz = pytz.timezone(TIMEZONE) # This is line 22
+tz = pytz.timezone(TIMEZONE) # This is line 22 where the error occurs
+
 # --- Helper Functions for Streamlit App ---
 
 @st.cache_data(ttl=5) # Cache for 5 seconds to avoid constant image re-fetches
