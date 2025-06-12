@@ -29,8 +29,8 @@ from ultralytics import YOLO
 
 # --- Configuration Constants ---
 QUEUE_AREA = (390, 324, 1276, 595) # (x1, y1, x2, y2) for the queue detection region
-MIN_CONFIDENCE = 0.025 # Minimum confidence score for YOLO detections
-MIN_HEIGHT = 10 # Minimum height of detected bounding box to consider as a person
+MIN_CONFIDENCE = 0.010 # Minimum confidence score for YOLO detections
+MIN_HEIGHT = 5 # Minimum height of detected bounding box to consider as a person
 ADJUSTMENT_FACTOR = 50 # Example adjustment for count if base_count > 0.
                         # This was a fixed +50 in your original code.
 TIMEZONE = 'Europe/Tallinn'       # <--- THIS LINE MUST BE PRESENT AND EXACTLY LIKE THIS
