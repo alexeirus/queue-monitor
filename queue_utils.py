@@ -1,3 +1,4 @@
+# queue_utils.py - MODIFIED (Reverted detection parameters and adjustment factor logic to original)
 import os
 import requests
 import time
@@ -11,31 +12,16 @@ from google.cloud import storage
 from io import BytesIO
 from PIL import Image
 
-# It's good practice to ensure these imports are consistent for Ultralytics
-# The 'torch.serialization' imports are only necessary if you are
-# explicitly calling torch.load with weights_only=False and need to
-# allowlist custom classes. For standard YOLO model loading, these
-# are often not strictly needed unless Ultralytics's internal mechanism
-# specifically relies on them for older model formats.
-# Given the error, we're removing the problematic `add_safe_globals` call.
-# import torch.serialization
-# import torch.nn.modules.container
-# import ultralytics.nn.tasks
-# import ultralytics.nn.modules
-# import ultralytics.nn.modules.conv
-# import ultralytics.nn.modules.block
-
 from ultralytics import YOLO
 
 # --- Configuration Constants ---
 QUEUE_AREA = (390, 324, 1276, 595) # (x1, y1, x2, y2) for the queue detection region
-MIN_CONFIDENCE = 0.010 # Minimum confidence score for YOLO detections
-MIN_HEIGHT = 5 # Minimum height of detected bounding box to consider as a person
-ADJUSTMENT_FACTOR = 50 # Example adjustment for count if base_count > 0.
-                        # This was a fixed +50 in your original code.
-TIMEZONE = 'Europe/Tallinn'       # <--- THIS LINE MUST BE PRESENT AND EXACTLY LIKE THIS
-# REMOVED: tz = pytz.timezone(TIMEZONE) # <--- THIS LINE SHOULD STILL BE GONE
-
+MIN_CONFIDENCE = 0.010 # Keeping as is per your request
+MIN_HEIGHT = 5 # Keeping as is per your request
+ADJUSTMENT_FACTOR = 50 # Keeping this constant as is per your request.
+                        # The application of this (+50 if base_count > 0)
+                        # will be handled in queue_collector.py (where person_count is calculated).
+TIMEZONE = 'Europe/Tallinn'
 
 # GCS Configuration
 GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "narva-queue-history-data")
@@ -46,29 +32,6 @@ GCS_LIVE_IMAGE_OBJECT_NAME = "live_detection_feed.jpg" # Stores the latest image
 MODEL_URL = "https://ultralytics.com/assets/yolov8s.pt"
 MODEL_PATH = "yolov8s.pt" # Local path where the model will be stored
 CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg" # URL for the live camera feed
-
-# --- Safe Globals for PyTorch (REMOVED: The `add_safe_globals` call, as it's causing AttributeError) ---
-# This block is commented out/removed because `torch.serialization.add_safe_globals`
-# is not available in recent PyTorch versions, leading to AttributeError.
-# The YOLO model loading should work without it.
-# try:
-#     from ultralytics.nn.modules.block import SPPF
-#     sppf_module = SPPF
-# except (ImportError, AttributeError):
-#     sppf_module = None
-# safe_globals = [
-#     ultralytics.nn.tasks.DetectionModel,
-#     ultralytics.nn.modules.Conv,
-#     ultralytics.nn.modules.conv.Conv,
-#     ultralytics.nn.modules.conv.Concat,
-#     ultralytics.nn.modules.block.C2f,
-#     ultralytics.nn.modules.block.Bottleneck,
-#     torch.nn.modules.container.Sequential
-# ]
-# if sppf_module:
-#     safe_globals.append(sppf_module)
-# torch.serialization.add_safe_globals(safe_globals)
-
 
 # --- Helper function for GCS client ---
 def get_gcs_client():
@@ -116,7 +79,7 @@ class QueueAnalyzer:
 
     def __init__(self, model):
         self.model = model
-        self.tz = pytz.timezone(TIMEZONE) # This line should now find TIMEZONE
+        self.tz = pytz.timezone(TIMEZONE)
         self.gcs_client = get_gcs_client()
         self.history_df = self._load_history_from_gcs()
 
@@ -134,18 +97,22 @@ class QueueAnalyzer:
                 csv_bytes = blob.download_as_bytes()
                 df = pd.read_csv(BytesIO(csv_bytes))
 
-                df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S.%f%z', errors='coerce')
+                # Ensure timestamp is parsed correctly and timezone-aware
+                df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
                 df.dropna(subset=['timestamp'], inplace=True) # Drop rows where timestamp parsing failed
+
+                # If timestamp is naive, assume it's UTC (as it's saved as UTC) then convert to local timezone
+                if df['timestamp'].dt.tz is None:
+                    df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
+                df['timestamp'] = df['timestamp'].dt.tz_convert(self.tz)
+                df.set_index('timestamp', inplace=True)
 
                 if 'count' in df.columns:
                     df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0).astype(int)
                 else:
                     print("Warning: 'count' column not found in GCS history. Initializing with zeros.")
                     df['count'] = 0
-
-                # Ensure timestamp is timezone-aware and set as index
-                df['timestamp'] = df['timestamp'].dt.tz_convert(self.tz)
-                df.set_index('timestamp', inplace=True)
+                
                 print(f"Loaded {len(df)} entries from GCS: {GCS_OBJECT_NAME}")
                 return df
             except pd.errors.EmptyDataError:
@@ -224,18 +191,23 @@ class QueueAnalyzer:
             return []
         
         # Use classes=0 for 'person' in COCO dataset (YOLOv8 default)
+        # Keeping conf and imgsz as they are in your provided file
         results = self.model(image, classes=0, conf=MIN_CONFIDENCE, imgsz=640, verbose=False)
         detections = []
         for result in results:
             for box in result.boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 height = y2 - y1
+                # Keeping this height filter as is, no other aggressive filtering re-added as it wasn't in your original
                 if height > MIN_HEIGHT:
                     detections.append((x1, y1, x2, y2))
         return detections
 
     def predict_trend(self) -> str:
         """Predicts the queue trend based on recent history."""
+        if self.history_df.empty or 'count' not in self.history_df.columns:
+            return "No data for trend analysis."
+            
         if len(self.history_df) < 4: # Need at least 4 data points for a trend
             return "Insufficient data to determine trend."
         recent = self.history_df.tail(4)["count"].values
@@ -251,24 +223,33 @@ class QueueAnalyzer:
         return "Queue is stable →"
 
     def best_hours_to_cross(self) -> str:
-        """Determines the best hours to cross based on historical averages."""
+        """Determines the best hours to cross based on historical averages (from all history, not filtered)."""
+        if self.history_df.empty or 'count' not in self.history_df.columns:
+            return "No historical data to determine best hours."
+
         if len(self.history_df) < 24: # Need at least a day's worth of data for good hourly averages
             return "Need more historical data to determine best hours."
 
         # Ensure index is datetime and timezone-aware before grouping by hour
         if not pd.api.types.is_datetime64_any_dtype(self.history_df.index) or self.history_df.index.tz is None:
             print("Warning: history_df index not datetime or timezone-aware for best_hours_to_cross. Attempting to fix.")
-            temp_index = pd.to_datetime(self.history_df.index.astype(str), errors='coerce')
-            temp_index = temp_index.tz_localize('UTC').tz_convert(self.tz) # Assume UTC if no TZ, then convert
-            self.history_df.index = temp_index
-            self.history_df.dropna(subset=[self.history_df.index.name], inplace=True)
+            try:
+                temp_index = pd.to_datetime(self.history_df.index, errors='coerce')
+                if temp_index.tz is None:
+                    temp_index = temp_index.tz_localize('UTC')
+                temp_index = temp_index.tz_convert(self.tz)
+                self.history_df.index = temp_index
+                self.history_df.dropna(subset=[self.history_df.index.name], inplace=True)
+            except Exception as e:
+                print(f"Error fixing timestamp in best_hours_to_cross: {e}")
+                return "Error: Timestamp data format issue preventing best hours calculation."
+            
             if self.history_df.empty:
                 return "Error: Timestamp data format issue preventing best hours calculation."
 
         avg_by_hour = self.history_df.groupby(self.history_df.index.hour)["count"].mean()
         if avg_by_hour.empty:
             return "No historical data to determine best hours."
-        
-        # Get the top 3 hours with the lowest average count
+            
         best_hours = avg_by_hour.sort_values().head(3).index.tolist()
         return ", ".join(f"{h:02d}:00-{h+1:02d}:00" for h in best_hours)
