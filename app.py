@@ -27,7 +27,7 @@ tz = pytz.timezone(TIMEZONE)
 # --- Configuration for Predictive Analytics (NEW) ---
 OPERATIONAL_START_HOUR = 7
 OPERATIONAL_END_HOUR = 23 # Exclusive, so up to 22:59:59
-# These control how much data *outside* operational hours is included in hourly trends graph
+# These controls how much data *outside* operational hours is included in hourly trends graph
 RAMP_UP_HOURS = 2   # e.g., if START_HOUR is 7, data from 5 AM onwards included
 RAMP_DOWN_HOURS = 2 # e.g., if END_HOUR is 23, data up to 1 AM (next day) included
 
@@ -79,6 +79,13 @@ def load_queue_history_from_gcs_for_display():
             if df['timestamp'].dt.tz is None: # If naive, assume UTC as it's saved as UTC
                 df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
             df['timestamp'] = df['timestamp'].dt.tz_convert(TIMEZONE) # Convert to local display timezone
+            
+            # --- CRITICAL ADDITION FOR DISPLAY FIX ---
+            # Make the timestamp timezone-naive AFTER converting to the local timezone
+            # This prevents Streamlit/Plotly from re-converting to the browser's local time for display
+            df['timestamp'] = df['timestamp'].dt.tz_localize(None)
+            # --- END OF CRITICAL ADDITION ---
+
             df.set_index('timestamp', inplace=True)
 
             if 'count' in df.columns:
@@ -87,11 +94,15 @@ def load_queue_history_from_gcs_for_display():
                 st.error("CSV must contain 'count' column. Analytics may be impacted.")
                 df['count'] = 0 # Default to 0 if 'count' is missing
             
-            # Ensure day_of_week and hour columns are present for analytics
-            if 'day_of_week' not in df.columns:
-                df['day_of_week'] = df.index.dayofweek
-            if 'hour' not in df.columns:
-                df['hour'] = df.index.hour
+            # --- ADDED FOR DIAGNOSTICS - KEEP TEMPORARILY ---
+            st.write("--- Timezone Diagnostics ---")
+            st.write(f"DataFrame Index Timezone (after tz_localize(None)): {df.index.tz}") # Should be None
+            if not df.empty:
+                st.write(f"First Timestamp in DataFrame: {df.index.min()}")
+                st.write(f"Last Timestamp in DataFrame: {df.index.max()}")
+                st.write(f"Current System Time (Narva): {datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S %Z%z')}")
+            st.write("--------------------------")
+            # --- END OF DIAGNOSTICS ---
 
             return df
         except pd.errors.EmptyDataError:
@@ -271,6 +282,7 @@ image_with_detections = fetch_live_detection_image_from_gcs()
 with live_section_container:
     with col1:
         if image_with_detections is not None:
+            # Use Narva timezone for the live update timestamp
             timestamp_display = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
             latest_image_placeholder.image(image_with_detections,
                                             caption=f"Last updated: {timestamp_display} (Live Detections by Collector)",
@@ -282,6 +294,7 @@ with live_section_container:
                 raw_image_response = requests.get(CAMERA_URL, timeout=10)
                 raw_image_response.raise_for_status()
                 raw_image_array = cv2.imdecode(np.frombuffer(raw_image_response.content, np.uint8), cv2.IMREAD_COLOR)
+                # Use Narva timezone for fallback raw image timestamp
                 timestamp_display = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
                 latest_image_placeholder.image(raw_image_array, caption=f"Last updated: {timestamp_display} (Raw Feed, No Detections)",
                                                 channels="BGR", use_container_width=True)
