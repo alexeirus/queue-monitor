@@ -19,8 +19,8 @@ QUEUE_AREA = (390, 324, 1276, 595) # (x1, y1, x2, y2) for the queue detection re
 MIN_CONFIDENCE = 0.010 # Keeping as is per your request
 MIN_HEIGHT = 5 # Keeping as is per your request
 ADJUSTMENT_FACTOR = 50 # Keeping this constant as is per your request.
-                        # The application of this (+50 if base_count > 0)
-                        # will be handled in queue_collector.py (where person_count is calculated).
+                         # The application of this (+50 if base_count > 0)
+                         # will be handled in queue_collector.py (where person_count is calculated).
 TIMEZONE = 'Europe/Tallinn'
 
 # GCS Configuration
