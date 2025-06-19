@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta # Corrected: Added timedelta
 import pandas as pd
 import cv2
 import numpy as np
@@ -19,15 +19,14 @@ from queue_utils import (
     CAMERA_URL,
     RAW_COUNT_THRESHOLD,       # New import
     ADDITIONAL_PEDESTRIANS,    # New import
-    CROP_REGION                # New import
+    CROP_REGION,               # New import
+    DETECTION_ROI_RELATIVE     # New import
 )
 
 # Initialize timezone
 tz = pytz.timezone(TIMEZONE)
 
 # --- YOLO Model Configuration ---
-# Load a pre-trained YOLOv8n model
-# Ensure this model file is accessible in your deployment environment
 MODEL_PATH = os.getenv("YOLO_MODEL_PATH", "yolov8n.pt") # Default to yolov8n.pt
 try:
     model = YOLO(MODEL_PATH)
@@ -41,52 +40,6 @@ TARGET_CLASS_IDS = [0] # Class ID 0 corresponds to 'person' in COCO dataset
 
 # Confidence threshold for detections
 CONF_THRESHOLD = 0.5
-
-# Region of Interest (ROI) for detections in the original image (x_min, y_min, x_max, y_max)
-# This ROI is for filtering detections *after* the initial image crop.
-# It should correspond to the area where the queue actually forms *within the CROP_REGION*.
-# These values are relative to the *cropped* image.
-# You will likely need to adjust these by observing your processed image.
-# Example: If your crop is 700x1320 (from CROP_REGION), then these ROI values should be within that.
-# For simplicity and to match the prompt's implied broad area,
-# let's initially define an ROI that covers most of the cropped queue area.
-# This assumes CROP_REGION produces an image roughly (1080-300) x (1920-600) = 780x1320.
-# So x goes from 0 to 1320, y goes from 0 to 780 within the cropped image.
-# The user's image shows the queue mostly on the right side of the road/parking lot.
-# This ROI will encompass that general area within the cropped image.
-DETECTION_ROI = [600 - CROP_REGION[2], 300 - CROP_REGION[0], 1920 - CROP_REGION[2], 1080 - CROP_REGION[0]]
-# Re-evaluating DETECTION_ROI based on CROP_REGION to be relative to the cropped image:
-# x_min = max(0, 600 - CROP_REGION[2])
-# y_min = max(0, 300 - CROP_REGION[0])
-# x_max = min(1920 - CROP_REGION[2], 1920 - CROP_REGION[2]) # max x of cropped image
-# y_max = min(1080 - CROP_REGION[0], 1080 - CROP_REGION[0]) # max y of cropped image
-
-# The DETECTION_ROI should be defined relative to the *cropped* image dimensions.
-# Let's assume CROP_REGION is applied first.
-# The `results.boxes.xyxy` coordinates are relative to the *input image* fed to the model.
-# Since we're cropping the input image, the ROI should be relative to the *cropped* image.
-# If CROP_REGION = (y_min_abs, y_max_abs, x_min_abs, x_max_abs), then the cropped image
-# dimensions are (y_max_abs - y_min_abs) x (x_max_abs - x_min_abs).
-# A simple ROI covering the full cropped image would be [0, 0, (x_max_abs - x_min_abs), (y_max_abs - y_min_abs)].
-# However, the user wants detections only in the queue area. Let's make this explicit.
-# Based on the image, the queue is primarily on the right side of the main road.
-# Let's set the DETECTION_ROI to a reasonable portion of the cropped image.
-# These values are *relative to the cropped image* now.
-# (x_min, y_min, x_max, y_max) of the specific queue area within the cropped frame.
-# This might need fine-tuning. Let's try to focus on the sidewalk area on the right.
-# Assuming cropped image is roughly 1320x780 (width x height)
-DETECTION_ROI_RELATIVE = [600, 300, 1300, 700] # These values need to be carefully chosen relative to the cropped image.
-# Let's simplify DETECTION_ROI to just cover the right side of the image, as that's where the queue is.
-# The crop already limits the view. Let's use coordinates within the cropped image.
-# If the crop is `frame = frame[300:1080, 600:1920]`, then the cropped image is 780 pixels high and 1320 pixels wide.
-# A reasonable DETECTION_ROI within this cropped image focusing on the queue:
-# (x_min_relative, y_min_relative, x_max_relative, y_max_relative)
-DETECTION_ROI_RELATIVE = [
-    800,  # x_min (start further right in the cropped image)
-    400,  # y_min (start below the parking lot, higher on the image)
-    1300, # x_max (end towards the far right of the cropped image)
-    750   # y_max (end towards the bottom of the cropped image)
-]
 
 
 def load_queue_history_from_gcs():
@@ -154,10 +107,6 @@ def process_frame(frame, model):
     if model is None:
         return 0, frame # Return 0 count and original frame if model not loaded
 
-    # Draw the CROP_REGION on the original frame for debugging purposes (optional)
-    # This helps visualize where the crop is applied on the full image
-    # cv2.rectangle(frame, (CROP_REGION[2], CROP_REGION[0]), (CROP_REGION[3], CROP_REGION[1]), (255, 0, 0), 2) # Blue box for crop area
-
     # Apply the CROP_REGION to zoom in
     # Ensure the crop region is within frame dimensions
     h, w, _ = frame.shape
@@ -173,10 +122,11 @@ def process_frame(frame, model):
     
     if cropped_frame.shape[0] == 0 or cropped_frame.shape[1] == 0:
         print("Warning: Cropped frame has zero dimensions. Check CROP_REGION settings.")
-        return 0, frame # Return 0 count and original frame if crop results in empty frame
+        # Fallback: if crop results in an empty frame, return 0 count and original frame
+        return 0, frame 
 
     # Run YOLO detection on the cropped frame
-    results = model(cropped_frame, conf=CONF_THRESHOLD, verbose=False) # verbose=False to reduce console output
+    results = model(cropped_frame, conf=CONF_THRESHOLD, verbose=False)
 
     current_raw_count = 0
     annotated_cropped_frame = cropped_frame.copy() # Make a copy to draw on
@@ -186,7 +136,7 @@ def process_frame(frame, model):
             if r.boxes:
                 for box in r.boxes.xyxy:
                     x1, y1, x2, y2 = map(int, box[:4])
-                    cls = int(r.boxes.cls[0]) # Class ID
+                    cls = int(r.boxes.cls[0]) # Class ID for the detection
 
                     if cls in TARGET_CLASS_IDS:
                         # Check if detection is within the DETECTION_ROI_RELATIVE within the cropped image
@@ -197,6 +147,7 @@ def process_frame(frame, model):
                             cv2.rectangle(annotated_cropped_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
     # Draw the DETECTION_ROI_RELATIVE on the annotated cropped frame for visual debugging
+    # This helps confirm the area where detections are counted
     cv2.rectangle(annotated_cropped_frame, 
                   (DETECTION_ROI_RELATIVE[0], DETECTION_ROI_RELATIVE[1]),
                   (DETECTION_ROI_RELATIVE[2], DETECTION_ROI_RELATIVE[3]),
@@ -210,6 +161,7 @@ def process_frame(frame, model):
     # Add count text to the annotated cropped frame
     # Use adjusted count for display
     timestamp_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+    # Removed "(Raw)" as per your request
     text = f"Last updated: {timestamp_str} | Detected: {current_adjusted_count}"
     cv2.putText(annotated_cropped_frame, text, (10, annotated_cropped_frame.shape[0] - 20),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA) # White text
@@ -237,7 +189,7 @@ def main():
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
             if frame is None:
-                print("Failed to decode image from URL.")
+                print("Failed to decode image from URL. Skipping this frame.")
                 time.sleep(FETCH_INTERVAL_SECONDS)
                 continue
 
@@ -250,6 +202,7 @@ def main():
             current_time = datetime.now(tz)
 
             # Append current data to DataFrame
+            # Ensure the 'count' column always stores the adjusted count
             new_row = pd.DataFrame([{'timestamp': current_time, 'count': adjusted_count}])
             queue_history_df = pd.concat([queue_history_df, new_row], ignore_index=True)
 
@@ -261,9 +214,9 @@ def main():
             print(f"[{current_time.strftime('%Y-%m-%d %H:%M:%S')}] Detected (Adjusted): {adjusted_count} people.")
 
         except requests.exceptions.RequestException as e:
-            print(f"Error fetching image from URL: {e}")
+            print(f"Error fetching image from URL: {e}. Retrying...")
         except Exception as e:
-            print(f"An unexpected error occurred: {e}")
+            print(f"An unexpected error occurred: {e}. Retrying...")
 
         time.sleep(FETCH_INTERVAL_SECONDS)
 
