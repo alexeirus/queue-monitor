@@ -9,6 +9,7 @@ import numpy as np
 from io import BytesIO
 import pytz
 import plotly.express as px # Import plotly for better charts
+import plotly.graph_objects as go # ADDED FOR MORE CUSTOMIZABLE PLOTS
 
 # Import necessary components from queue_utils
 from queue_utils import (
@@ -94,14 +95,14 @@ def load_queue_history_from_gcs_for_display():
                 st.error("CSV must contain 'count' column. Analytics may be impacted.")
                 df['count'] = 0 # Default to 0 if 'count' is missing
             
-            # --- ADDED FOR DIAGNOSTICS - KEEP TEMPORARILY ---
-            st.write("--- Timezone Diagnostics ---")
-            st.write(f"DataFrame Index Timezone (after tz_localize(None)): {df.index.tz}") # Should be None
-            if not df.empty:
-                st.write(f"First Timestamp in DataFrame: {df.index.min()}")
-                st.write(f"Last Timestamp in DataFrame: {df.index.max()}")
-                st.write(f"Current System Time (Narva): {datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S %Z%z')}")
-            st.write("--------------------------")
+            # --- ADDED FOR DIAGNOSTICS - REMOVE AFTER CONFIRMATION ---
+            # st.write("--- Timezone Diagnostics ---")
+            # st.write(f"DataFrame Index Timezone (after tz_localize(None)): {df.index.tz}") # Should be None
+            # if not df.empty:
+            #     st.write(f"First Timestamp in DataFrame: {df.index.min()}")
+            #     st.write(f"Last Timestamp in DataFrame: {df.index.max()}")
+            #     st.write(f"Current System Time (Narva): {datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S %Z%z')}")
+            # st.write("--------------------------")
             # --- END OF DIAGNOSTICS ---
 
             return df
@@ -114,7 +115,7 @@ def load_queue_history_from_gcs_for_display():
         return pd.DataFrame(columns=['timestamp', 'count', 'day_of_week', 'hour'])
 
 
-# --- NEW Predictive Analytics Functions (using Plotly) ---
+# --- Predictive Analytics Functions (using Plotly) ---
 
 def analyze_hourly_trends(df):
     if df.empty:
@@ -258,6 +259,69 @@ def analyze_queue_movement_speed(df):
     
     return fig, "This graph shows the approximate change in queue size per hour. Positive values mean the queue is growing, negative values mean it's shrinking. A larger absolute value indicates faster movement."
 
+def analyze_daily_summary_queue(df):
+    """
+    Generates a Plotly chart showing daily min, max, and average queue counts.
+    """
+    if df.empty:
+        return None, "No data for daily summary analysis."
+
+    # Group by date and calculate min, max, and mean
+    daily_summary = df.resample('D')['count'].agg(['min', 'max', 'mean']).reset_index()
+    daily_summary.columns = ['Date', 'Min Queue', 'Max Queue', 'Average Queue']
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=daily_summary['Date'],
+        y=daily_summary['Max Queue'],
+        mode='lines+markers',
+        name='Daily Max Queue',
+        line=dict(color='red', width=2),
+        hovertemplate='<b>Date:</b> %{x|%Y-%m-%d}<br><b>Max Queue:</b> %{y}<extra></extra>'
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=daily_summary['Date'],
+        y=daily_summary['Average Queue'],
+        mode='lines+markers',
+        name='Daily Average Queue',
+        line=dict(color='blue', width=2),
+        hovertemplate='<b>Date:</b> %{x|%Y-%m-%d}<br><b>Average Queue:</b> %{y:.2f}<extra></extra>'
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=daily_summary['Date'],
+        y=daily_summary['Min Queue'],
+        mode='lines+markers',
+        name='Daily Min Queue',
+        line=dict(color='green', width=2),
+        hovertemplate='<b>Date:</b> %{x|%Y-%m-%d}<br><b>Min Queue:</b> %{y}<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title='Daily Queue Summary (Min, Max, Average)',
+        xaxis_title='Date (Narva)',
+        yaxis_title='Queue Size (People)',
+        hovermode="x unified" # Enables synchronized hover over all traces
+    )
+    
+    fig.update_xaxes(
+        rangeselector=dict(
+            buttons=list([
+                dict(count=7, label="1w", step="day", stepmode="backward"),
+                dict(count=1, label="1m", step="month", stepmode="backward"),
+                dict(count=3, label="3m", step="month", stepmode="backward"),
+                dict(step="all")
+            ])
+        ),
+        rangeslider=dict(visible=True),
+        type="date"
+    )
+
+    return fig, "This chart shows the minimum, maximum, and average queue size for each day. Hover for details."
+
+
 # --- Streamlit App Layout ---
 st.set_page_config(page_title="Narva Queue Monitor", layout="wide", initial_sidebar_state="collapsed")
 st.title("🚶 Narva Queue Monitor - Real-time & Predictive Analytics")
@@ -329,7 +393,7 @@ st.header("Historical Data and Predictive Analytics")
 full_history_df = load_queue_history_from_gcs_for_display()
 
 if not full_history_df.empty:
-    # 1. Graph: Queue numbers hour by hour (7-23 with ramp-up/down)
+    # 1. Graph: Hourly Queue Trends
     st.subheader("Hourly Queue Trends")
     hourly_fig, hourly_text = analyze_hourly_trends(full_history_df)
     if hourly_fig:
@@ -338,7 +402,7 @@ if not full_history_df.empty:
     else:
         st.info(hourly_text)
 
-    # 2. Graph: Best days of the week to cross
+    # 2. Graph: Daily Queue Trends (Bar Chart)
     st.subheader("Daily Queue Trends")
     daily_fig, daily_text = analyze_daily_trends(full_history_df)
     if daily_fig:
@@ -347,7 +411,7 @@ if not full_history_df.empty:
     else:
         st.info(daily_text)
 
-    # 3. Graph: How fast the queue is moving
+    # 3. Graph: Queue Movement Speed
     st.subheader("Queue Movement Speed")
     movement_fig, movement_text = analyze_queue_movement_speed(full_history_df)
     if movement_fig:
@@ -356,9 +420,45 @@ if not full_history_df.empty:
     else:
         st.info(movement_text)
 
-    # You can still keep the general historical line chart if desired
-    st.subheader("Raw Queue Count Over Time")
-    st.line_chart(full_history_df['count'], use_container_width=True)
+    # 4. NEW CHART: Daily Queue Summary (Min, Max, Average)
+    st.subheader("Daily Queue Summary (Min, Max, Average)")
+    daily_summary_fig, daily_summary_text = analyze_daily_summary_queue(full_history_df)
+    if daily_summary_fig:
+        st.plotly_chart(daily_summary_fig, use_container_width=True)
+        st.write(daily_summary_text)
+    else:
+        st.info(daily_summary_text)
+
+    # 5. MODIFIED CHART: Raw Queue Count Over Time (with Plotly and range selector)
+    st.subheader("Raw Queue Count Over Time (with Zoom)")
+    # Filter for the last 30 days for better initial readability, but user can zoom out
+    # Ensure 'timestamp' is a column for px.line by resetting index
+    df_for_raw_plot = full_history_df.reset_index()
+
+    if not df_for_raw_plot.empty:
+        fig_raw = px.line(
+            df_for_raw_plot,
+            x='timestamp',
+            y='count',
+            title='Raw Queue Count Over Time',
+            labels={'timestamp': 'Date and Time (Narva)', 'count': 'Queue Size (People)'}
+        )
+        fig_raw.update_xaxes(
+            rangeselector=dict(
+                buttons=list([
+                    dict(count=1, label="1d", step="day", stepmode="backward"),
+                    dict(count=7, label="1w", step="day", stepmode="backward"),
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(step="all")
+                ])
+            ),
+            rangeslider=dict(visible=True),
+            type="date"
+        )
+        fig_raw.update_layout(hovermode="x unified") # Enhanced hover to show all traces at a given x
+        st.plotly_chart(fig_raw, use_container_width=True)
+    else:
+        st.info("No raw queue data available.")
 
 
 else:
