@@ -1,14 +1,14 @@
+# app.py (streamlit_app.py) - MODIFIED
 import os
 import time
 import streamlit as st
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta # Import timedelta for range calculations
 import pandas as pd
 import cv2
 import numpy as np
 from io import BytesIO
 import pytz
-import plotly.express as px
-import plotly.graph_objects as go
+import plotly.express as px # Import plotly for better charts
 
 # Import necessary components from queue_utils
 from queue_utils import (
@@ -18,17 +18,18 @@ from queue_utils import (
     GCS_LIVE_IMAGE_OBJECT_NAME,
     TIMEZONE,
     CAMERA_URL,
-    QueueAnalyzer
+    QueueAnalyzer # We'll still use this for its specific prediction methods
 )
 
 # Initialize timezone from queue_utils
 tz = pytz.timezone(TIMEZONE)
 
-# --- Configuration for Predictive Analytics ---
+# --- Configuration for Predictive Analytics (NEW) ---
 OPERATIONAL_START_HOUR = 7
 OPERATIONAL_END_HOUR = 23 # Exclusive, so up to 22:59:59
-RAMP_UP_HOURS = 2
-RAMP_DOWN_HOURS = 2
+# These controls how much data *outside* operational hours is included in hourly trends graph
+RAMP_UP_HOURS = 2   # e.g., if START_HOUR is 7, data from 5 AM onwards included
+RAMP_DOWN_HOURS = 2 # e.g., if END_HOUR is 23, data up to 1 AM (next day) included
 
 # --- Helper Functions for Streamlit App ---
 
@@ -93,6 +94,16 @@ def load_queue_history_from_gcs_for_display():
                 st.error("CSV must contain 'count' column. Analytics may be impacted.")
                 df['count'] = 0 # Default to 0 if 'count' is missing
             
+            # --- ADDED FOR DIAGNOSTICS - KEEP TEMPORARILY ---
+            st.write("--- Timezone Diagnostics ---")
+            st.write(f"DataFrame Index Timezone (after tz_localize(None)): {df.index.tz}") # Should be None
+            if not df.empty:
+                st.write(f"First Timestamp in DataFrame: {df.index.min()}")
+                st.write(f"Last Timestamp in DataFrame: {df.index.max()}")
+                st.write(f"Current System Time (Narva): {datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S %Z%z')}")
+            st.write("--------------------------")
+            # --- END OF DIAGNOSTICS ---
+
             return df
         except pd.errors.EmptyDataError:
             return pd.DataFrame(columns=['timestamp', 'count', 'day_of_week', 'hour'])
@@ -103,18 +114,20 @@ def load_queue_history_from_gcs_for_display():
         return pd.DataFrame(columns=['timestamp', 'count', 'day_of_week', 'hour'])
 
 
-# --- Predictive Analytics Functions (using Plotly) ---
+# --- NEW Predictive Analytics Functions (using Plotly) ---
 
 def analyze_hourly_trends(df):
     if df.empty:
         return None, "No data to analyze hourly trends."
 
+    # Filter to operational hours with ramp-up/down
+    # Adjusted modulo for robust handling of hours like 0, 1, 23, 24
     start_hour_with_ramp = (OPERATIONAL_START_HOUR - RAMP_UP_HOURS + 24) % 24
     end_hour_with_ramp = (OPERATIONAL_END_HOUR + RAMP_DOWN_HOURS + 24) % 24
 
     if start_hour_with_ramp < end_hour_with_ramp:
         df_filtered = df[(df.index.hour >= start_hour_with_ramp) & (df.index.hour < end_hour_with_ramp)].copy()
-    else:
+    else: # Spans across midnight, e.g., 22 to 3
         df_filtered = df[(df.index.hour >= start_hour_with_ramp) | (df.index.hour < end_hour_with_ramp)].copy()
 
 
@@ -127,6 +140,7 @@ def analyze_hourly_trends(df):
     hourly_avg = df_filtered.groupby(df_filtered.index.hour)['count'].mean().reset_index()
     hourly_avg.columns = ['Hour', 'Average Queue']
 
+    # Sort by hour for proper graph display
     hourly_avg.sort_values('Hour', inplace=True)
 
     fig = px.line(
@@ -138,16 +152,17 @@ def analyze_hourly_trends(df):
         line_shape='linear',
         markers=True
     )
-    fig.update_xaxes(dtick=1)
-    fig.update_layout(hovermode="x unified")
+    fig.update_xaxes(dtick=1) # Ensure hours are integers
+    fig.update_layout(hovermode="x unified") # Nice hover effect
 
+    # Identify best times within strict operational hours
     best_hours_df = hourly_avg[
         (hourly_avg['Hour'] >= OPERATIONAL_START_HOUR) &
         (hourly_avg['Hour'] < OPERATIONAL_END_HOUR)
     ]
     if not best_hours_df.empty:
         best_times = best_hours_df.sort_values('Average Queue').head(3)
-        best_times_str = ", ".join([f"{int(h):02d}:00-{int(h)+1:02d}:02d" for h in best_times['Hour']])
+        best_times_str = ", ".join([f"{int(h):02d}:00-{int(h)+1:02d}:00" for h in best_times['Hour']])
     else:
         best_times_str = "N/A (No data for strict operational hours)"
 
@@ -157,6 +172,7 @@ def analyze_daily_trends(df):
     if df.empty:
         return None, "No data to analyze daily trends."
 
+    # Filter to operational hours to make daily averages more relevant
     df_filtered = df[
         (df.index.hour >= OPERATIONAL_START_HOUR) &
         (df.index.hour < OPERATIONAL_END_HOUR)
@@ -168,15 +184,18 @@ def analyze_daily_trends(df):
     if df_filtered.empty:
         return None, "No data for selected operational hours on any day."
 
+    # Map day_of_week (0=Monday, 6=Sunday) to names for better display
     day_names = {0: 'Monday', 1: 'Tuesday', 2: 'Wednesday', 3: 'Thursday', 4: 'Friday', 5: 'Saturday', 6: 'Sunday'}
+    # Ensure all days are represented even if no data, for consistent order
     daily_avg_all_days = pd.DataFrame(list(day_names.items()), columns=['day_of_week', 'Day Name'])
     
+    # Calculate average and merge
     actual_daily_avg = df_filtered.groupby(df_filtered.index.dayofweek)['count'].mean().reset_index()
     actual_daily_avg.columns = ['day_of_week', 'Average Queue']
 
     daily_avg_merged = pd.merge(daily_avg_all_days, actual_daily_avg, on='day_of_week', how='left')
-    daily_avg_merged['Average Queue'].fillna(0, inplace=True)
-    daily_avg_merged.sort_values('day_of_week', inplace=True)
+    daily_avg_merged['Average Queue'].fillna(0, inplace=True) # Fill missing days with 0 or NaN
+    daily_avg_merged.sort_values('day_of_week', inplace=True) # Sort by numeric day for correct order
 
     fig = px.bar(
         daily_avg_merged,
@@ -187,7 +206,8 @@ def analyze_daily_trends(df):
     )
     fig.update_layout(hovermode="x unified")
 
-    best_days_df = daily_avg_merged[daily_avg_merged['Average Queue'] > 0]
+    # Identify best days (consider only days with actual data for sorting, or handle 0s gracefully)
+    best_days_df = daily_avg_merged[daily_avg_merged['Average Queue'] > 0] # Only consider days with actual queue data
     if not best_days_df.empty:
         best_days = best_days_df.sort_values('Average Queue').head(3)
         best_days_str = ", ".join(best_days['Day Name'])
@@ -200,6 +220,7 @@ def analyze_queue_movement_speed(df):
     if df.empty:
         return None, "No data for queue movement speed analysis."
     
+    # Filter to operational hours to make speed analysis relevant
     df_filtered = df[
         (df.index.hour >= OPERATIONAL_START_HOUR) &
         (df.index.hour < OPERATIONAL_END_HOUR)
@@ -208,15 +229,17 @@ def analyze_queue_movement_speed(df):
     if df_filtered.empty:
         return None, "No operational data for queue movement speed analysis."
 
+    # Resample to hourly mean, then calculate difference
     df_resampled = df_filtered['count'].resample('1H').mean().ffill() 
     
     if len(df_resampled) < 2:
         return None, "Insufficient data after resampling for movement speed."
 
+    # Calculate the difference in count hour-over-hour
     df_resampled_diff = df_resampled.diff().dropna()
     df_resampled_diff = df_resampled_diff.reset_index()
     df_resampled_diff.columns = ['Hour', 'Change in Queue (People/Hour)']
-    df_resampled_diff['Hour'] = df_resampled_diff['Hour'].dt.hour
+    df_resampled_diff['Hour'] = df_resampled_diff['Hour'].dt.hour # Extract just the hour number
 
     fig = px.bar(
         df_resampled_diff,
@@ -224,74 +247,16 @@ def analyze_queue_movement_speed(df):
         y='Change in Queue (People/Hour)',
         title='Hourly Change in Queue Size (People/Hour) During Operational Hours',
         labels={'Hour': 'Hour of Day', 'Change in Queue (People/Hour)': 'Change in Queue Size'},
-        color='Change in Queue (People/Hour)',
-        color_continuous_scale=px.colors.sequential.RdBu,
+        color='Change in Queue (People/Hour)', # Color by positive/negative change
+        color_continuous_scale=px.colors.sequential.RdBu, # Red for decrease, Blue for increase
+        # Ensure symmetric color range for better visualization of positive/negative changes
         range_color=[-max(abs(df_resampled_diff['Change in Queue (People/Hour)'].max()), abs(df_resampled_diff['Change in Queue (People/Hour)'].min())),
                      max(abs(df_resampled_diff['Change in Queue (People/Hour)'].max()), abs(df_resampled_diff['Change in Queue (People/Hour)'].min()))] 
     )
     fig.update_layout(hovermode="x unified")
-    fig.update_xaxes(dtick=1)
+    fig.update_xaxes(dtick=1) # Show hourly ticks
     
     return fig, "This graph shows the approximate change in queue size per hour. Positive values mean the queue is growing, negative values mean it's shrinking. A larger absolute value indicates faster movement."
-
-def analyze_daily_summary_queue(df):
-    if df.empty:
-        return None, "No data for daily summary analysis."
-
-    daily_summary = df.resample('D')['count'].agg(['min', 'max', 'mean']).reset_index()
-    daily_summary.columns = ['Date', 'Min Queue', 'Max Queue', 'Average Queue']
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Scatter(
-        x=daily_summary['Date'],
-        y=daily_summary['Max Queue'],
-        mode='lines+markers',
-        name='Daily Max Queue',
-        line=dict(color='red', width=2),
-        hovertemplate='<b>Date:</b> %{x|%Y-%m-%d}<br><b>Max Queue:</b> %{y}<extra></extra>'
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=daily_summary['Date'],
-        y=daily_summary['Average Queue'],
-        mode='lines+markers',
-        name='Daily Average Queue',
-        line=dict(color='blue', width=2),
-        hovertemplate='<b>Date:</b> %{x|%Y-%m-%d}<br><b>Average Queue:</b> %{y:.2f}<extra></extra>'
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=daily_summary['Date'],
-        y=daily_summary['Min Queue'],
-        mode='lines+markers',
-        name='Daily Min Queue',
-        line=dict(color='green', width=2),
-        hovertemplate='<b>Date:</b> %{x|%Y-%m-%d}<br><b>Min Queue:</b> %{y}<extra></extra>'
-    ))
-
-    fig.update_layout(
-        title='Daily Queue Summary (Min, Max, Average)',
-        xaxis_title='Date (Narva)',
-        yaxis_title='Queue Size (People)',
-        hovermode="x unified"
-    )
-    
-    fig.update_xaxes(
-        rangeselector=dict(
-            buttons=list([
-                dict(count=7, label="1w", step="day", stepmode="backward"),
-                dict(count=1, label="1m", step="month", stepmode="backward"),
-                dict(count=3, label="3m", step="month", stepmode="backward"),
-                dict(step="all")
-            ])
-        ),
-        rangeslider=dict(visible=True),
-        type="date"
-    )
-
-    return fig, "This chart shows the minimum, maximum, and average queue size for each day. Hover for details."
-
 
 # --- Streamlit App Layout ---
 st.set_page_config(page_title="Narva Queue Monitor", layout="wide", initial_sidebar_state="collapsed")
@@ -317,10 +282,10 @@ image_with_detections = fetch_live_detection_image_from_gcs()
 with live_section_container:
     with col1:
         if image_with_detections is not None:
-            # The timestamp and count are now drawn by the collector on the image itself
-            # We don't need to re-create the text here.
+            # Use Narva timezone for the live update timestamp
+            timestamp_display = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
             latest_image_placeholder.image(image_with_detections,
-                                            caption=f"Live Detections by Collector (Image includes timestamp and count)",
+                                            caption=f"Last updated: {timestamp_display} (Live Detections by Collector)",
                                             channels="BGR", use_container_width=True)
         else:
             # Fallback if no pre-processed image is available from GCS (e.g., collector not running yet)
@@ -340,12 +305,13 @@ with live_section_container:
 
     with col2:
         # Load queue history for the latest count and trend
-        # This will now contain the adjusted count
         queue_df_for_live_info = load_queue_history_from_gcs_for_display()
         if not queue_df_for_live_info.empty and 'count' in queue_df_for_live_info.columns:
             latest_live_count = queue_df_for_live_info['count'].iloc[-1]
-            live_count_metric_placeholder.metric("Detected People", int(latest_live_count)) # No "(Raw)"
+            live_count_metric_placeholder.metric("Detected People (Live)", int(latest_live_count))
             
+            # Instantiate a temporary analyzer just to get the predict_trend
+            # It will use the 'count' column which already includes the ADJUSTMENT_FACTOR
             temp_analyzer = QueueAnalyzer(None) 
             temp_analyzer.history_df = queue_df_for_live_info 
             trend_status_placeholder.write(f"**Trend:** {temp_analyzer.predict_trend()}")
@@ -359,9 +325,11 @@ st.markdown("---")
 # --- Display Historical Data and Predictive Analytics ---
 st.header("Historical Data and Predictive Analytics")
 
+# Load queue history for Streamlit display and analytics (this is cached)
 full_history_df = load_queue_history_from_gcs_for_display()
 
 if not full_history_df.empty:
+    # 1. Graph: Queue numbers hour by hour (7-23 with ramp-up/down)
     st.subheader("Hourly Queue Trends")
     hourly_fig, hourly_text = analyze_hourly_trends(full_history_df)
     if hourly_fig:
@@ -370,6 +338,7 @@ if not full_history_df.empty:
     else:
         st.info(hourly_text)
 
+    # 2. Graph: Best days of the week to cross
     st.subheader("Daily Queue Trends")
     daily_fig, daily_text = analyze_daily_trends(full_history_df)
     if daily_fig:
@@ -378,6 +347,7 @@ if not full_history_df.empty:
     else:
         st.info(daily_text)
 
+    # 3. Graph: How fast the queue is moving
     st.subheader("Queue Movement Speed")
     movement_fig, movement_text = analyze_queue_movement_speed(full_history_df)
     if movement_fig:
@@ -386,46 +356,16 @@ if not full_history_df.empty:
     else:
         st.info(movement_text)
 
-    st.subheader("Daily Queue Summary (Min, Max, Average)")
-    daily_summary_fig, daily_summary_text = analyze_daily_summary_queue(full_history_df)
-    if daily_summary_fig:
-        st.plotly_chart(daily_summary_fig, use_container_width=True)
-        st.write(daily_summary_text)
-    else:
-        st.info(daily_summary_text)
-
-    st.subheader("Raw Queue Count Over Time (with Zoom)")
-    df_for_raw_plot = full_history_df.reset_index()
-
-    if not df_for_raw_plot.empty:
-        fig_raw = px.line(
-            df_for_raw_plot,
-            x='timestamp',
-            y='count',
-            title='Raw Queue Count Over Time',
-            labels={'timestamp': 'Date and Time (Narva)', 'count': 'Queue Size (People)'}
-        )
-        fig_raw.update_xaxes(
-            rangeselector=dict(
-                buttons=list([
-                    dict(count=1, label="1d", step="day", stepmode="backward"),
-                    dict(count=7, label="1w", step="day", stepmode="backward"),
-                    dict(count=1, label="1m", step="month", stepmode="backward"),
-                    dict(step="all")
-                ])
-            ),
-            rangeslider=dict(visible=True),
-            type="date"
-        )
-        fig_raw.update_layout(hovermode="x unified")
-        st.plotly_chart(fig_raw, use_container_width=True)
-    else:
-        st.info("No raw queue data available.")
+    # You can still keep the general historical line chart if desired
+    st.subheader("Raw Queue Count Over Time")
+    st.line_chart(full_history_df['count'], use_container_width=True)
 
 
 else:
     st.info("No historical queue data available yet. Please wait for the `queue_collector.py` worker to generate data and upload it to GCS.")
 
+# --- Auto-refresh feature control (REMOVED st.rerun()) ---
+# The caching (ttl) on the data loading functions handles the updates
 st.markdown("---")
 st.info("Data for charts and live image updates automatically. The page does not refresh visibly.")
 st.caption(f"Live image updates every 5 seconds. Historical data updates every 60 seconds. (controlled by @st.cache_data ttl)")
