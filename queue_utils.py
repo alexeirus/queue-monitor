@@ -31,7 +31,7 @@ def get_gcs_client():
         return None
 
 # --- Camera and Timezone Configuration ---
-CAMERA_URL = os.getenv("CAMERA_URL", "http://minsk.webcam.by/narva/current.jpg")
+CAMERA_URL = os.getenv("CAMERA_URL", "https://thumbs.balticlivecam.com/blc/narva.jpg") # <-- CHANGE THIS LINE
 TIMEZONE = os.getenv("TIMEZONE", "Europe/Tallinn") # Narva is in Estonia
 
 # --- Queue Analysis Configuration ---
