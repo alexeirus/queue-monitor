@@ -95,16 +95,6 @@ def load_queue_history_from_gcs_for_display():
                 st.error("CSV must contain 'count' column. Analytics may be impacted.")
                 df['count'] = 0 # Default to 0 if 'count' is missing
             
-            # --- ADDED FOR DIAGNOSTICS - REMOVE AFTER CONFIRMATION ---
-            # st.write("--- Timezone Diagnostics ---")
-            # st.write(f"DataFrame Index Timezone (after tz_localize(None)): {df.index.tz}") # Should be None
-            # if not df.empty:
-            #     st.write(f"First Timestamp in DataFrame: {df.index.min()}")
-            #     st.write(f"Last Timestamp in DataFrame: {df.index.max()}")
-            #     st.write(f"Current System Time (Narva): {datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S %Z%z')}")
-            # st.write("--------------------------")
-            # --- END OF DIAGNOSTICS ---
-
             return df
         except pd.errors.EmptyDataError:
             return pd.DataFrame(columns=['timestamp', 'count', 'day_of_week', 'hour'])
@@ -252,7 +242,7 @@ def analyze_queue_movement_speed(df):
         color_continuous_scale=px.colors.sequential.RdBu, # Red for decrease, Blue for increase
         # Ensure symmetric color range for better visualization of positive/negative changes
         range_color=[-max(abs(df_resampled_diff['Change in Queue (People/Hour)'].max()), abs(df_resampled_diff['Change in Queue (People/Hour)'].min())),
-                     max(abs(df_resampled_diff['Change in Queue (People/Hour)'].max()), abs(df_resampled_diff['Change in Queue (People/Hour)'].min()))] 
+                      max(abs(df_resampled_diff['Change in Queue (People/Hour)'].max()), abs(df_resampled_diff['Change in Queue (People/Hour)'].min()))] 
     )
     fig.update_layout(hovermode="x unified")
     fig.update_xaxes(dtick=1) # Show hourly ticks
@@ -393,6 +383,16 @@ st.header("Historical Data and Predictive Analytics")
 full_history_df = load_queue_history_from_gcs_for_display()
 
 if not full_history_df.empty:
+    # Display overall best times to cross (NEW ADDITION)
+    temp_analyzer_for_overall_times = QueueAnalyzer(None) # Analyzer for getting best times
+    temp_analyzer_for_overall_times.history_df = full_history_df # Use the loaded history
+    best_times_info = temp_analyzer_for_overall_times.get_overall_best_times()
+    
+    st.markdown(f"**Overall Best Day to Cross:** <span style='color:green; font-weight:bold;'>{best_times_info['best_day_name']}</span>", unsafe_allow_html=True)
+    st.markdown(f"**Overall Best Hours to Cross:** <span style='color:green; font-weight:bold;'>{best_times_info['best_hours']}</span>", unsafe_allow_html=True)
+    st.markdown("---")
+
+
     # 1. Graph: Hourly Queue Trends
     st.subheader("Hourly Queue Trends")
     hourly_fig, hourly_text = analyze_hourly_trends(full_history_df)
