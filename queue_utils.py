@@ -37,13 +37,13 @@ def get_gcs_client():
     otherwise falls back to GCS_CREDENTIALS_BASE64 environment variable.
     """
     creds_base64 = None
-    
+
     # Check if Streamlit is running and if st.secrets is initialized
     try:
         import streamlit as st
         # Check if st.secrets is truly available and initialized by Streamlit
         # st.runtime.exists() ensures we are in an active Streamlit app session
-        if hasattr(st, 'secrets') and st.runtime.exists() and "gcs_credentials_base64" in st.secrets:
+        if hasattr(st, 'secrets') and st.runtime.exists() and "gcs_credentials_base64" in st.secrets: # THIS IS THE CRITICAL LINE
             creds_base64 = st.secrets["gcs_credentials_base64"]
             print("GCS credentials found in Streamlit secrets (app context).")
         else:
@@ -61,7 +61,7 @@ def get_gcs_client():
             print("GCS credentials from environment variable (Streamlit not imported).")
         else:
             print("GCS credentials not found in environment variable (Streamlit not imported).")
-            
+
 
     if creds_base64:
         try:
