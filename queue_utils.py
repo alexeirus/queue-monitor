@@ -280,7 +280,7 @@ class QueueAnalyzer:
         day_of_week: 0 for Monday, 6 for Sunday.
         """
         if self.history_df.empty or 'count' not in self.history_df.columns:
-            return pd.DataFrame(columns=['hour', 'average_count'])
+            return pd.DataFrame(columns=['hour', 'average_count', 'hour_str']) # Ensure hour_str too
 
         # Ensure 'day_of_week' column is present; it should be from update_history
         if 'day_of_week' not in self.history_df.columns:
@@ -289,7 +289,7 @@ class QueueAnalyzer:
         df_filtered = self.history_df[self.history_df['day_of_week'] == day_of_week].copy()
 
         if df_filtered.empty:
-            return pd.DataFrame(columns=['hour', 'average_count'])
+            return pd.DataFrame(columns=['hour', 'average_count', 'hour_str']) # Ensure hour_str too
 
         # Group by hour and calculate mean count
         hourly_averages = df_filtered.groupby('hour')['count'].mean().reset_index()
@@ -297,11 +297,13 @@ class QueueAnalyzer:
         hourly_averages['hour_str'] = hourly_averages['hour'].apply(lambda x: f"{x:02d}:00")
         # Ensure all 24 hours are present, filling missing with 0
         all_hours = pd.DataFrame({'hour': range(24)})
-        hourly_averages = pd.merge(all_hours, hourly_averages, on='hour', how='left').fillna(0)
+        # Fill only average_count with 0, and then re-generate hour_str for full 24 hours
+        hourly_averages = pd.merge(all_hours, hourly_averages, on='hour', how='left').fillna({'average_count': 0}) 
         hourly_averages['average_count'] = hourly_averages['average_count'].astype(int)
         hourly_averages['hour_str'] = hourly_averages['hour'].apply(lambda x: f"{x:02d}:00")
 
-        return hourly_averages.set_index('hour') # Set hour as index for easier plotting
+        # Removed the .set_index('hour') line here
+        return hourly_averages
 
     def get_overall_best_times(self) -> dict:
         """
