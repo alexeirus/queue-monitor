@@ -7,5 +7,6 @@ Pillow
 pytz
 google-cloud-storage
 ultralytics
-torch==2.3.1 --index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.3.1
 plotly
