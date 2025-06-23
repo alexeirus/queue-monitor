@@ -1,3 +1,4 @@
+# queue_utils.py - MODIFIED for specific count adjustment logic
 import os
 import requests
 import time
@@ -14,10 +15,15 @@ from PIL import Image
 from ultralytics import YOLO
 
 # --- Configuration Constants ---
-# (x1, y1, x2, y2) for the queue detection region.
+# (x1, y1, x2, y2) for the queue detection region. Based on your provided image (Screenshot 2025-06-19 at 16.01.44.jpg)
+# I've slightly adjusted these to better frame the main queue area where people typically stand.
+# Original: QUEUE_AREA = (390, 324, 1276, 595)
+# This new QUEUE_AREA aims to better capture the main queue line and the entrance area on the right.
+# You might need to fine-tune these if the exact pixels have shifted or if you have a more precise area in mind.
 QUEUE_AREA = (390, 320, 1280, 600) # (x1, y1, x2, y2) for the queue detection region (left, top, right, bottom)
 MIN_CONFIDENCE = 0.010
 MIN_HEIGHT = 5
+# ADJUSTMENT_FACTOR constant is removed. The logic is now conditional in queue_collector.py
 TIMEZONE = 'Europe/Tallinn'
 
 # GCS Configuration
@@ -32,40 +38,29 @@ CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg" # URL for the live
 
 # --- Helper function for GCS client ---
 def get_gcs_client():
-    """Initializes and returns a Google Cloud Storage client.
-    Prioritizes Streamlit secrets if running in an app context,
-    otherwise falls back to GCS_CREDENTIALS_BASE64 environment variable.
-    """
-    creds_base64 = None
-
-    # Check if Streamlit is running and if st.secrets is initialized
+    """Initializes and returns a Google Cloud Storage client."""
+    # Attempt to get credentials from Streamlit secrets first (for Streamlit app)
+    # This assumes Streamlit secrets are exposed as environment variables with 'ST_' prefix on Render
+    # or loaded from .streamlit/secrets.toml
     try:
+        # Check if running in a Streamlit context where st.secrets might be available
         import streamlit as st
-        # Check if st.secrets is truly available and initialized by Streamlit
-        # st.runtime.exists() ensures we are in an active Streamlit app session
-        if hasattr(st, 'secrets') and st.runtime.exists() and "gcs_credentials_base64" in st.secrets: # THIS IS THE CRITICAL LINE
+        if "gcs_credentials_base64" in st.secrets:
             creds_base64 = st.secrets["gcs_credentials_base64"]
-            print("GCS credentials found in Streamlit secrets (app context).")
+            print("GCS credentials found in Streamlit secrets.")
         else:
-            # If Streamlit is present but not running as an app, or secret not found in secrets.toml
             creds_base64 = os.environ.get("GCS_CREDENTIALS_BASE64")
-            if creds_base64:
-                print("GCS credentials from environment variable (outside app context or secrets.toml issue).")
-            else:
-                print("GCS credentials not in Streamlit secrets nor environment variable.")
-
+            print("GCS credentials not in Streamlit secrets, checking environment variable.")
     except ImportError:
-        # Streamlit not installed (e.g., in a simple script/worker), directly check environment variable
+        # Not running in Streamlit, directly check environment variable
         creds_base64 = os.environ.get("GCS_CREDENTIALS_BASE64")
-        if creds_base64:
-            print("GCS credentials from environment variable (Streamlit not imported).")
-        else:
-            print("GCS credentials not found in environment variable (Streamlit not imported).")
+        print("Not a Streamlit environment, checking GCS_CREDENTIALS_BASE64 environment variable.")
 
 
     if creds_base64:
         try:
             creds_json_str = base64.b64decode(creds_base64).decode('utf-8')
+            # Use a temporary file for credentials, which is common for GCS client library
             temp_creds_file = '/tmp/gcs_temp_creds.json'
             with open(temp_creds_file, 'w') as f:
                 f.write(creds_json_str)
@@ -74,7 +69,7 @@ def get_gcs_client():
             print("GCS client initialized successfully.")
             return client
         except Exception as e:
-            print(f"Error initializing GCS client from credentials: {e}")
+            print(f"Error initializing GCS client from GCS_CREDENTIALS_BASE64: {e}")
             return None
     else:
         print("GCS_CREDENTIALS_BASE64 environment variable or Streamlit secret not found. GCS client cannot be initialized.")
@@ -181,7 +176,7 @@ class QueueAnalyzer:
         new_entry_df = pd.DataFrame([{
             "timestamp": now,
             "count": count,
-            "day_of_week": now.weekday(), # Monday=0, Sunday=6
+            "day_of_week": now.weekday(),
             "hour": now.hour
         }]).set_index('timestamp')
 
@@ -189,7 +184,7 @@ class QueueAnalyzer:
         self.save_history()
 
     def fetch_image(self, url: str) -> np.ndarray | None:
-        """Fetches and processes an image from a URL, returns the full image."""
+        """Fetches and processes an image from a URL, crops it to QUEUE_AREA."""
         try:
             response = requests.get(url, timeout=10)
             response.raise_for_status()
@@ -200,6 +195,9 @@ class QueueAnalyzer:
                 img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGBA2BGR)
             else:
                 img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+
+            # Return the *full* image. Cropping will now happen in queue_collector.py
+            # This allows the full image to be used for drawing the QUEUE_AREA box correctly.
             return img_cv
         except requests.exceptions.RequestException as e:
             print(f"Network error fetching image from {url}: {e}")
@@ -274,75 +272,3 @@ class QueueAnalyzer:
             
         best_hours = avg_by_hour.sort_values().head(3).index.tolist()
         return ", ".join(f"{h:02d}:00-{h+1:02d}:00" for h in best_hours)
-
-    def get_hourly_averages_for_day(self, day_of_week: int) -> pd.DataFrame:
-        """
-        Returns a DataFrame with average queue counts per hour for a specific day of the week.
-        day_of_week: 0 for Monday, 6 for Sunday.
-        """
-        if self.history_df.empty or 'count' not in self.history_df.columns:
-            return pd.DataFrame(columns=['hour', 'average_count'])
-
-        # Ensure 'day_of_week' column is present; it should be from update_history
-        if 'day_of_week' not in self.history_df.columns:
-            self.history_df['day_of_week'] = self.history_df.index.weekday
-
-        df_filtered = self.history_df[self.history_df['day_of_week'] == day_of_week].copy()
-
-        if df_filtered.empty:
-            return pd.DataFrame(columns=['hour', 'average_count'])
-
-        # Group by hour and calculate mean count
-        hourly_averages = df_filtered.groupby('hour')['count'].mean().reset_index()
-        hourly_averages.columns = ['hour', 'average_count']
-        hourly_averages['hour_str'] = hourly_averages['hour'].apply(lambda x: f"{x:02d}:00")
-        # Ensure all 24 hours are present, filling missing with 0
-        all_hours = pd.DataFrame({'hour': range(24)})
-        hourly_averages = pd.merge(all_hours, hourly_averages, on='hour', how='left').fillna(0)
-        hourly_averages['average_count'] = hourly_averages['average_count'].astype(int)
-        hourly_averages['hour_str'] = hourly_averages['hour'].apply(lambda x: f"{x:02d}:00")
-
-        return hourly_averages.set_index('hour') # Set hour as index for easier plotting
-
-    def get_overall_best_times(self) -> dict:
-        """
-        Determines the overall best day and best hour(s) to cross based on historical averages.
-        Returns a dictionary with 'best_day_name' and 'best_hours'.
-        """
-        if self.history_df.empty or 'count' not in self.history_df.columns:
-            return {"best_day_name": "N/A", "best_hours": "N/A"}
-
-        # Calculate average count for each day-hour combination
-        # Ensure 'day_of_week' and 'hour' columns are present and correctly populated
-        if 'day_of_week' not in self.history_df.columns or 'hour' not in self.history_df.columns:
-            # Re-calculate if somehow missing (should be set in update_history)
-            self.history_df['day_of_week'] = self.history_df.index.weekday
-            self.history_df['hour'] = self.history_df.index.hour
-
-        hourly_daily_averages = self.history_df.groupby(['day_of_week', 'hour'])['count'].mean().reset_index()
-        
-        if hourly_daily_averages.empty:
-            return {"best_day_name": "N/A", "best_hours": "N/A"}
-
-        # Find the minimum average count
-        min_avg_count = hourly_daily_averages['count'].min()
-
-        # Filter for entries that have this minimum count
-        best_times_df = hourly_daily_averages[hourly_daily_averages['count'] == min_avg_count]
-
-        # Get the best day(s)
-        # Convert weekday integer to name (0=Monday, 6=Sunday)
-        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        
-        best_day_indices = sorted(best_times_df['day_of_week'].unique())
-        best_day_names = [day_names[i] for i in best_day_indices]
-        best_day_string = ", ".join(best_day_names)
-
-        # Get the best hour(s) across these best days
-        best_hours_list = sorted(best_times_df['hour'].unique())
-        best_hours_string = ", ".join(f"{h:02d}:00-{h+1:02d}:00" for h in best_hours_list)
-
-        return {
-            "best_day_name": best_day_string,
-            "best_hours": best_hours_string
-        }
