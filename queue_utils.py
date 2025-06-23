@@ -1,9 +1,9 @@
-# queue_utils.py - MODIFIED (Reverted detection parameters and adjustment factor logic to original)
+# queue_utils.py - MODIFIED for specific count adjustment logic
 import os
 import requests
 import time
 from datetime import datetime
-import pytz # Keep this import
+import pytz
 import pandas as pd
 import cv2
 import numpy as np
@@ -15,12 +15,15 @@ from PIL import Image
 from ultralytics import YOLO
 
 # --- Configuration Constants ---
-QUEUE_AREA = (390, 324, 1276, 595) # (x1, y1, x2, y2) for the queue detection region
-MIN_CONFIDENCE = 0.010 # Keeping as is per your request
-MIN_HEIGHT = 5 # Keeping as is per your request
-ADJUSTMENT_FACTOR = 50 # Keeping this constant as is per your request.
-                         # The application of this (+50 if base_count > 0)
-                         # will be handled in queue_collector.py (where person_count is calculated).
+# (x1, y1, x2, y2) for the queue detection region. Based on your provided image (Screenshot 2025-06-19 at 16.01.44.jpg)
+# I've slightly adjusted these to better frame the main queue area where people typically stand.
+# Original: QUEUE_AREA = (390, 324, 1276, 595)
+# This new QUEUE_AREA aims to better capture the main queue line and the entrance area on the right.
+# You might need to fine-tune these if the exact pixels have shifted or if you have a more precise area in mind.
+QUEUE_AREA = (390, 320, 1280, 600) # (x1, y1, x2, y2) for the queue detection region (left, top, right, bottom)
+MIN_CONFIDENCE = 0.010
+MIN_HEIGHT = 5
+# ADJUSTMENT_FACTOR constant is removed. The logic is now conditional in queue_collector.py
 TIMEZONE = 'Europe/Tallinn'
 
 # GCS Configuration
@@ -36,10 +39,28 @@ CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg" # URL for the live
 # --- Helper function for GCS client ---
 def get_gcs_client():
     """Initializes and returns a Google Cloud Storage client."""
-    creds_base64 = os.environ.get("GCS_CREDENTIALS_BASE64")
+    # Attempt to get credentials from Streamlit secrets first (for Streamlit app)
+    # This assumes Streamlit secrets are exposed as environment variables with 'ST_' prefix on Render
+    # or loaded from .streamlit/secrets.toml
+    try:
+        # Check if running in a Streamlit context where st.secrets might be available
+        import streamlit as st
+        if "gcs_credentials_base64" in st.secrets:
+            creds_base64 = st.secrets["gcs_credentials_base64"]
+            print("GCS credentials found in Streamlit secrets.")
+        else:
+            creds_base64 = os.environ.get("GCS_CREDENTIALS_BASE64")
+            print("GCS credentials not in Streamlit secrets, checking environment variable.")
+    except ImportError:
+        # Not running in Streamlit, directly check environment variable
+        creds_base64 = os.environ.get("GCS_CREDENTIALS_BASE64")
+        print("Not a Streamlit environment, checking GCS_CREDENTIALS_BASE64 environment variable.")
+
+
     if creds_base64:
         try:
             creds_json_str = base64.b64decode(creds_base64).decode('utf-8')
+            # Use a temporary file for credentials, which is common for GCS client library
             temp_creds_file = '/tmp/gcs_temp_creds.json'
             with open(temp_creds_file, 'w') as f:
                 f.write(creds_json_str)
@@ -51,7 +72,7 @@ def get_gcs_client():
             print(f"Error initializing GCS client from GCS_CREDENTIALS_BASE64: {e}")
             return None
     else:
-        print("GCS_CREDENTIALS_BASE64 environment variable not found. GCS client cannot be initialized.")
+        print("GCS_CREDENTIALS_BASE64 environment variable or Streamlit secret not found. GCS client cannot be initialized.")
         return None
 
 # --- Helper to download YOLO model ---
@@ -175,9 +196,9 @@ class QueueAnalyzer:
             else:
                 img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
 
-            # Return the cropped image for detection
-            cropped_img = img_cv[QUEUE_AREA[1]:QUEUE_AREA[3], QUEUE_AREA[0]:QUEUE_AREA[2]]
-            return cropped_img
+            # Return the *full* image. Cropping will now happen in queue_collector.py
+            # This allows the full image to be used for drawing the QUEUE_AREA box correctly.
+            return img_cv
         except requests.exceptions.RequestException as e:
             print(f"Network error fetching image from {url}: {e}")
             return None
@@ -191,14 +212,12 @@ class QueueAnalyzer:
             return []
         
         # Use classes=0 for 'person' in COCO dataset (YOLOv8 default)
-        # Keeping conf and imgsz as they are in your provided file
         results = self.model(image, classes=0, conf=MIN_CONFIDENCE, imgsz=640, verbose=False)
         detections = []
         for result in results:
             for box in result.boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 height = y2 - y1
-                # Keeping this height filter as is, no other aggressive filtering re-added as it wasn't in your original
                 if height > MIN_HEIGHT:
                     detections.append((x1, y1, x2, y2))
         return detections
