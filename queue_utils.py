@@ -1,4 +1,4 @@
-# queue_utils.py - MODIFIED for specific count adjustment logic
+# queue_utils.py - MODIFIED for new charting and prediction logic
 import os
 import requests
 import time
@@ -15,15 +15,10 @@ from PIL import Image
 from ultralytics import YOLO
 
 # --- Configuration Constants ---
-# (x1, y1, x2, y2) for the queue detection region. Based on your provided image (Screenshot 2025-06-19 at 16.01.44.jpg)
-# I've slightly adjusted these to better frame the main queue area where people typically stand.
-# Original: QUEUE_AREA = (390, 324, 1276, 595)
-# This new QUEUE_AREA aims to better capture the main queue line and the entrance area on the right.
-# You might need to fine-tune these if the exact pixels have shifted or if you have a more precise area in mind.
+# (x1, y1, x2, y2) for the queue detection region.
 QUEUE_AREA = (390, 320, 1280, 600) # (x1, y1, x2, y2) for the queue detection region (left, top, right, bottom)
 MIN_CONFIDENCE = 0.010
 MIN_HEIGHT = 5
-# ADJUSTMENT_FACTOR constant is removed. The logic is now conditional in queue_collector.py
 TIMEZONE = 'Europe/Tallinn'
 
 # GCS Configuration
@@ -39,11 +34,7 @@ CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg" # URL for the live
 # --- Helper function for GCS client ---
 def get_gcs_client():
     """Initializes and returns a Google Cloud Storage client."""
-    # Attempt to get credentials from Streamlit secrets first (for Streamlit app)
-    # This assumes Streamlit secrets are exposed as environment variables with 'ST_' prefix on Render
-    # or loaded from .streamlit/secrets.toml
     try:
-        # Check if running in a Streamlit context where st.secrets might be available
         import streamlit as st
         if "gcs_credentials_base64" in st.secrets:
             creds_base64 = st.secrets["gcs_credentials_base64"]
@@ -52,7 +43,6 @@ def get_gcs_client():
             creds_base64 = os.environ.get("GCS_CREDENTIALS_BASE64")
             print("GCS credentials not in Streamlit secrets, checking environment variable.")
     except ImportError:
-        # Not running in Streamlit, directly check environment variable
         creds_base64 = os.environ.get("GCS_CREDENTIALS_BASE64")
         print("Not a Streamlit environment, checking GCS_CREDENTIALS_BASE64 environment variable.")
 
@@ -60,7 +50,6 @@ def get_gcs_client():
     if creds_base64:
         try:
             creds_json_str = base64.b64decode(creds_base64).decode('utf-8')
-            # Use a temporary file for credentials, which is common for GCS client library
             temp_creds_file = '/tmp/gcs_temp_creds.json'
             with open(temp_creds_file, 'w') as f:
                 f.write(creds_json_str)
@@ -176,7 +165,7 @@ class QueueAnalyzer:
         new_entry_df = pd.DataFrame([{
             "timestamp": now,
             "count": count,
-            "day_of_week": now.weekday(),
+            "day_of_week": now.weekday(), # Monday=0, Sunday=6
             "hour": now.hour
         }]).set_index('timestamp')
 
@@ -184,7 +173,7 @@ class QueueAnalyzer:
         self.save_history()
 
     def fetch_image(self, url: str) -> np.ndarray | None:
-        """Fetches and processes an image from a URL, crops it to QUEUE_AREA."""
+        """Fetches and processes an image from a URL, returns the full image."""
         try:
             response = requests.get(url, timeout=10)
             response.raise_for_status()
@@ -195,9 +184,6 @@ class QueueAnalyzer:
                 img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGBA2BGR)
             else:
                 img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
-
-            # Return the *full* image. Cropping will now happen in queue_collector.py
-            # This allows the full image to be used for drawing the QUEUE_AREA box correctly.
             return img_cv
         except requests.exceptions.RequestException as e:
             print(f"Network error fetching image from {url}: {e}")
@@ -241,34 +227,19 @@ class QueueAnalyzer:
             return "Queue is shrinking slowly ↘"
         return "Queue is stable →"
 
-    def best_hours_to_cross(self) -> str:
-        """Determines the best hours to cross based on historical averages (from all history, not filtered)."""
+    def get_hourly_averages_for_day(self, day_of_week: int) -> pd.DataFrame:
+        """
+        Returns a DataFrame with average queue counts per hour for a specific day of the week.
+        day_of_week: 0 for Monday, 6 for Sunday.
+        """
         if self.history_df.empty or 'count' not in self.history_df.columns:
-            return "No historical data to determine best hours."
+            return pd.DataFrame(columns=['hour', 'average_count'])
 
-        if len(self.history_df) < 24: # Need at least a day's worth of data for good hourly averages
-            return "Need more historical data to determine best hours."
+        # Ensure index is datetime and timezone-aware
+        df_filtered = self.history_df[self.history_df['day_of_week'] == day_of_week].copy()
 
-        # Ensure index is datetime and timezone-aware before grouping by hour
-        if not pd.api.types.is_datetime64_any_dtype(self.history_df.index) or self.history_df.index.tz is None:
-            print("Warning: history_df index not datetime or timezone-aware for best_hours_to_cross. Attempting to fix.")
-            try:
-                temp_index = pd.to_datetime(self.history_df.index, errors='coerce')
-                if temp_index.tz is None:
-                    temp_index = temp_index.tz_localize('UTC')
-                temp_index = temp_index.tz_convert(self.tz)
-                self.history_df.index = temp_index
-                self.history_df.dropna(subset=[self.history_df.index.name], inplace=True)
-            except Exception as e:
-                print(f"Error fixing timestamp in best_hours_to_cross: {e}")
-                return "Error: Timestamp data format issue preventing best hours calculation."
-            
-            if self.history_df.empty:
-                return "Error: Timestamp data format issue preventing best hours calculation."
+        if df_filtered.empty:
+            return pd.DataFrame(columns=['hour', 'average_count'])
 
-        avg_by_hour = self.history_df.groupby(self.history_df.index.hour)["count"].mean()
-        if avg_by_hour.empty:
-            return "No historical data to determine best hours."
-            
-        best_hours = avg_by_hour.sort_values().head(3).index.tolist()
-        return ", ".join(f"{h:02d}:00-{h+1:02d}:00" for h in best_hours)
+        # Group by hour and calculate mean count
+        hourly_averages = df_filtered.
