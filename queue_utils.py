@@ -242,4 +242,50 @@ class QueueAnalyzer:
             return pd.DataFrame(columns=['hour', 'average_count'])
 
         # Group by hour and calculate mean count
-        hourly_averages = df_filtered.
+        hourly_averages = df_filtered.groupby('hour')['count'].mean().reset_index()
+        hourly_averages.columns = ['hour', 'average_count']
+        hourly_averages['hour_str'] = hourly_averages['hour'].apply(lambda x: f"{x:02d}:00")
+        return hourly_averages.set_index('hour') # Set hour as index for easier plotting
+
+    def get_overall_best_times(self) -> dict:
+        """
+        Determines the overall best day and best hour(s) to cross based on historical averages.
+        Returns a dictionary with 'best_day_name' and 'best_hours'.
+        """
+        if self.history_df.empty or 'count' not in self.history_df.columns:
+            return {"best_day_name": "N/A", "best_hours": "N/A"}
+
+        # Calculate average count for each day-hour combination
+        # Ensure 'day_of_week' and 'hour' columns are present and correctly populated
+        if 'day_of_week' not in self.history_df.columns or 'hour' not in self.history_df.columns:
+            # Re-calculate if somehow missing (should be set in update_history)
+            self.history_df['day_of_week'] = self.history_df.index.weekday
+            self.history_df['hour'] = self.history_df.index.hour
+
+        hourly_daily_averages = self.history_df.groupby(['day_of_week', 'hour'])['count'].mean().reset_index()
+        
+        if hourly_daily_averages.empty:
+            return {"best_day_name": "N/A", "best_hours": "N/A"}
+
+        # Find the minimum average count
+        min_avg_count = hourly_daily_averages['count'].min()
+
+        # Filter for entries that have this minimum count
+        best_times_df = hourly_daily_averages[hourly_daily_averages['count'] == min_avg_count]
+
+        # Get the best day(s)
+        # Convert weekday integer to name (0=Monday, 6=Sunday)
+        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        
+        best_day_indices = sorted(best_times_df['day_of_week'].unique())
+        best_day_names = [day_names[i] for i in best_day_indices]
+        best_day_string = ", ".join(best_day_names)
+
+        # Get the best hour(s) across these best days
+        best_hours_list = sorted(best_times_df['hour'].unique())
+        best_hours_string = ", ".join(f"{h:02d}:00-{h+1:02d}:00" for h in best_hours_list)
+
+        return {
+            "best_day_name": best_day_string,
+            "best_hours": best_hours_string
+        }
