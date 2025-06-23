@@ -1,3 +1,4 @@
+# queue_utils.py - MODIFIED for new charting and prediction logic
 import os
 import requests
 import time
@@ -14,6 +15,7 @@ from PIL import Image
 from ultralytics import YOLO
 
 # --- Configuration Constants ---
+# (x1, y1, x2, y2) for the queue detection region.
 QUEUE_AREA = (390, 320, 1280, 600) # (x1, y1, x2, y2) for the queue detection region (left, top, right, bottom)
 MIN_CONFIDENCE = 0.010
 MIN_HEIGHT = 5
@@ -31,36 +33,19 @@ CAMERA_URL = "https://thumbs.balticlivecam.com/blc/narva.jpg" # URL for the live
 
 # --- Helper function for GCS client ---
 def get_gcs_client():
-    """Initializes and returns a Google Cloud Storage client.
-    Prioritizes Streamlit secrets if running in an app context,
-    otherwise falls back to GCS_CREDENTIALS_BASE64 environment variable.
-    """
-    creds_base64 = None
-    
-    # Check if Streamlit is running and if st.secrets is initialized
+    """Initializes and returns a Google Cloud Storage client."""
     try:
         import streamlit as st
-        # This is the key change for robustness: checking if st and st.secrets exist/are initialized
-        if hasattr(st, 'secrets') and st.runtime.exists() and "gcs_credentials_base64" in st.secrets:
+        if "gcs_credentials_base64" in st.secrets:
             creds_base64 = st.secrets["gcs_credentials_base64"]
-            print("GCS credentials found in Streamlit secrets (app context).")
+            print("GCS credentials found in Streamlit secrets.")
         else:
-            # If Streamlit is present but not running as an app (like queue_collector.py),
-            # or secret not found in secrets.toml, fall back to environment variable
             creds_base64 = os.environ.get("GCS_CREDENTIALS_BASE64")
-            if creds_base64:
-                print("GCS credentials from environment variable (outside app context or secrets.toml issue).")
-            else:
-                print("GCS credentials not in Streamlit secrets nor environment variable.")
-
+            print("GCS credentials not in Streamlit secrets, checking environment variable.")
     except ImportError:
-        # Streamlit not installed (e.g., in a simple script/worker), directly check environment variable
         creds_base64 = os.environ.get("GCS_CREDENTIALS_BASE64")
-        if creds_base64:
-            print("GCS credentials from environment variable (Streamlit not imported).")
-        else:
-            print("GCS credentials not found in environment variable (Streamlit not imported).")
-            
+        print("Not a Streamlit environment, checking GCS_CREDENTIALS_BASE64 environment variable.")
+
 
     if creds_base64:
         try:
@@ -73,7 +58,7 @@ def get_gcs_client():
             print("GCS client initialized successfully.")
             return client
         except Exception as e:
-            print(f"Error initializing GCS client from credentials: {e}")
+            print(f"Error initializing GCS client from GCS_CREDENTIALS_BASE64: {e}")
             return None
     else:
         print("GCS_CREDENTIALS_BASE64 environment variable or Streamlit secret not found. GCS client cannot be initialized.")
@@ -242,68 +227,25 @@ class QueueAnalyzer:
             return "Queue is shrinking slowly ↘"
         return "Queue is stable →"
 
-    def best_hours_to_cross(self) -> str:
-        """Determines the best hours to cross based on historical averages (from all history, not filtered)."""
-        if self.history_df.empty or 'count' not in self.history_df.columns:
-            return "No historical data to determine best hours."
-
-        if len(self.history_df) < 24: # Need at least a day's worth of data for good hourly averages
-            return "Need more historical data to determine best hours."
-
-        # Ensure index is datetime and timezone-aware before grouping by hour
-        if not pd.api.types.is_datetime64_any_dtype(self.history_df.index) or self.history_df.index.tz is None:
-            print("Warning: history_df index not datetime or timezone-aware for best_hours_to_cross. Attempting to fix.")
-            try:
-                temp_index = pd.to_datetime(self.history_df.index, errors='coerce')
-                if temp_index.tz is None:
-                    temp_index = temp_index.tz_localize('UTC')
-                temp_index = temp_index.tz_convert(self.tz)
-                self.history_df.index = temp_index
-                self.history_df.dropna(subset=[self.history_df.index.name], inplace=True)
-            except Exception as e:
-                print(f"Error fixing timestamp in best_hours_to_cross: {e}")
-                return "Error: Timestamp data format issue preventing best hours calculation."
-            
-            if self.history_df.empty:
-                return "Error: Timestamp data format issue preventing best hours calculation."
-
-        avg_by_hour = self.history_df.groupby(self.history_df.index.hour)["count"].mean()
-        if avg_by_hour.empty:
-            return "No historical data to determine best hours."
-            
-        best_hours = avg_by_hour.sort_values().head(3).index.tolist()
-        return ", ".join(f"{h:02d}:00-{h+1:02d}:00" for h in best_hours)
-
     def get_hourly_averages_for_day(self, day_of_week: int) -> pd.DataFrame:
         """
         Returns a DataFrame with average queue counts per hour for a specific day of the week.
         day_of_week: 0 for Monday, 6 for Sunday.
         """
         if self.history_df.empty or 'count' not in self.history_df.columns:
-            return pd.DataFrame(columns=['hour', 'average_count', 'hour_str']) # Ensure hour_str too
+            return pd.DataFrame(columns=['hour', 'average_count'])
 
-        # Ensure 'day_of_week' column is present; it should be from update_history
-        if 'day_of_week' not in self.history_df.columns:
-            self.history_df['day_of_week'] = self.history_df.index.weekday
-
+        # Ensure index is datetime and timezone-aware
         df_filtered = self.history_df[self.history_df['day_of_week'] == day_of_week].copy()
 
         if df_filtered.empty:
-            return pd.DataFrame(columns=['hour', 'average_count', 'hour_str']) # Ensure hour_str too
+            return pd.DataFrame(columns=['hour', 'average_count'])
 
         # Group by hour and calculate mean count
         hourly_averages = df_filtered.groupby('hour')['count'].mean().reset_index()
         hourly_averages.columns = ['hour', 'average_count']
         hourly_averages['hour_str'] = hourly_averages['hour'].apply(lambda x: f"{x:02d}:00")
-        # Ensure all 24 hours are present, filling missing with 0
-        all_hours = pd.DataFrame({'hour': range(24)})
-        # Fill only average_count with 0, and then re-generate hour_str for full 24 hours
-        hourly_averages = pd.merge(all_hours, hourly_averages, on='hour', how='left').fillna({'average_count': 0}) 
-        hourly_averages['average_count'] = hourly_averages['average_count'].astype(int)
-        hourly_averages['hour_str'] = hourly_averages['hour'].apply(lambda x: f"{x:02d}:00")
-
-        # Removed the .set_index('hour') line here
-        return hourly_averages
+        return hourly_averages.set_index('hour') # Set hour as index for easier plotting
 
     def get_overall_best_times(self) -> dict:
         """
