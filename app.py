@@ -60,11 +60,14 @@ with col1:
             try:
                 # Use a unique URL or query parameter to bust cache and ensure fresh image
                 image_url = blob.public_url + f"?t={datetime.now().timestamp()}"
-                live_image_placeholder.image(image_url, caption="Live Detection View", use_column_width=True)
+                
+                # Use use_container_width instead of use_column_width
+                live_image_placeholder.image(image_url, caption="Live Detection View", use_container_width=True)
                 
                 # Fetch metadata to get the last update time from GCS object
-                blob.reload() # Reload blob metadata to get the latest update_time
-                last_update_utc = blob.update_time
+                # Corrected attribute: use blob.updated or blob.time_updated
+                blob.reload() # Reload blob metadata to get the latest updated time
+                last_update_utc = blob.updated # or blob.time_updated
                 last_update_local = last_update_utc.astimezone(tz)
                 last_collector_update_placeholder.caption(f"Last updated: {last_update_local.strftime('%Y-%m-%d %H:%M:%S')} (Live Detections by Collector)")
 
