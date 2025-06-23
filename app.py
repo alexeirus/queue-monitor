@@ -20,13 +20,19 @@ from queue_utils import (
     GCS_LIVE_IMAGE_OBJECT_NAME,
     TIMEZONE,
     CAMERA_URL,
-    QueueAnalyzer
+    QueueAnalyzer, # Ensure QueueAnalyzer is imported
+    MODEL_PATH, # Ensure MODEL_PATH is imported for YOLO initialization
+    download_yolo_model, # Ensure download_yolo_model is imported
+    MODEL_URL # Ensure MODEL_URL is imported for YOLO download
 )
+
+# Import YOLO for model loading
+from ultralytics import YOLO
 
 # Initialize timezone from queue_utils
 tz = pytz.timezone(TIMEZONE)
 
-# --- Configuration for Predictive Analytics (from previous versions, if still desired) ---
+# --- Configuration for Predictive Analytics ---
 OPERATIONAL_START_HOUR = 7
 OPERATIONAL_END_HOUR = 23 # Exclusive, so up to 22:59:59
 RAMP_UP_HOURS = 2
@@ -60,6 +66,7 @@ def load_queue_history_from_gcs_for_display():
     """Loads queue history from GCS for display and analytics in Streamlit."""
     gcs_client = get_gcs_client()
     if not gcs_client:
+        st.warning("GCS client not initialized. Cannot load history from GCS.")
         return pd.DataFrame(columns=['timestamp', 'count', 'day_of_week', 'hour'])
 
     bucket = gcs_client.bucket(GCS_BUCKET_NAME)
@@ -77,7 +84,9 @@ def load_queue_history_from_gcs_for_display():
                 df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
             df['timestamp'] = df['timestamp'].dt.tz_convert(TIMEZONE)
             
-            df['timestamp'] = df['timestamp'].dt.tz_localize(None) # Make timezone-naive AFTER local conversion
+            # Make timezone-naive AFTER local conversion for Streamlit plotting compatibility if needed
+            # For Plotly, it often works well with timezone-aware, but if issues arise, this line helps.
+            df['timestamp'] = df['timestamp'].dt.tz_localize(None) 
             
             df.set_index('timestamp', inplace=True)
 
@@ -92,14 +101,16 @@ def load_queue_history_from_gcs_for_display():
 
             return df
         except pd.errors.EmptyDataError:
+            st.info(f"GCS object {GCS_OBJECT_NAME} is empty. Starting with an empty history for display.")
             return pd.DataFrame(columns=['timestamp', 'count', 'day_of_week', 'hour'])
         except Exception as e:
             st.error(f"Error loading queue history from GCS for display: {e}")
             return pd.DataFrame(columns=['timestamp', 'count', 'day_of_week', 'hour'])
     else:
+        st.info(f"GCS object {GCS_OBJECT_NAME} not found. Starting with an empty history for display.")
         return pd.DataFrame(columns=['timestamp', 'count', 'day_of_week', 'hour'])
 
-# --- Predictive Analytics & Charting Functions (from previous app.py, now adjusted) ---
+# --- Predictive Analytics & Charting Functions ---
 
 def analyze_hourly_trends(df):
     if df.empty:
@@ -111,6 +122,7 @@ def analyze_hourly_trends(df):
     if start_hour_with_ramp < end_hour_with_ramp:
         df_filtered = df[(df.index.hour >= start_hour_with_ramp) & (df.index.hour < end_hour_with_ramp)].copy()
     else:
+        # Handle overnight operational hours
         df_filtered = df[(df.index.hour >= start_hour_with_ramp) | (df.index.hour < end_hour_with_ramp)].copy()
 
     df_filtered['count'] = pd.to_numeric(df_filtered['count'], errors='coerce')
@@ -181,7 +193,8 @@ def analyze_daily_trends(df):
     )
     fig.update_layout(hovermode="x unified")
 
-    best_days_df = daily_avg_merged[daily_avg_merged['Average Queue'] > 0]
+    # FIX: Corrected variable name from best_daily_avg_merged to daily_avg_merged
+    best_days_df = daily_avg_merged[daily_avg_merged['Average Queue'] > 0] 
     if not best_days_df.empty:
         best_days = best_days_df.sort_values('Average Queue').head(3)
         best_days_str = ", ".join(best_days['Day Name'])
@@ -202,7 +215,7 @@ def analyze_queue_movement_speed(df):
     if df_filtered.empty:
         return None, "No operational data for queue movement speed analysis."
 
-    df_resampled = df_filtered['count'].resample('1H').mean().ffill() 
+    df_resampled = df_filtered['count'].resample('1H').mean().ffill()    
     
     if len(df_resampled) < 2:
         return None, "Insufficient data after resampling for movement speed."
@@ -221,7 +234,7 @@ def analyze_queue_movement_speed(df):
         color='Change in Queue (People/Hour)',
         color_continuous_scale=px.colors.sequential.RdBu,
         range_color=[-max(abs(df_resampled_diff['Change in Queue (People/Hour)'].max()), abs(df_resampled_diff['Change in Queue (People/Hour)'].min())),
-                      max(abs(df_resampled_diff['Change in Queue (People/Hour)'].max()), abs(df_resampled_diff['Change in Queue (People/Hour)'].min()))] 
+                     max(abs(df_resampled_diff['Change in Queue (People/Hour)'].max()), abs(df_resampled_diff['Change in Queue (People/Hour)'].min()))]    
     )
     fig.update_layout(hovermode="x unified")
     fig.update_xaxes(dtick=1)
@@ -358,145 +371,90 @@ with live_section_container:
                 raw_image_array = cv2.imdecode(np.frombuffer(raw_image_response.content, np.uint8), cv2.IMREAD_COLOR)
                 timestamp_display = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
                 latest_image_placeholder.image(raw_image_array, caption=f"Last updated: {timestamp_display} (Raw Feed, No Detections)",
-                                                channels="BGR", use_container_width=True)
+                                                    channels="BGR", use_container_width=True)
             except requests.exceptions.RequestException as e:
                 latest_image_placeholder.error(f"⚠️ Could not load image from camera feed or GCS: {e}")
             except Exception as e:
-                latest_image_placeholder.error(f"⚠️ Error processing raw image: {e}")
+                latest_image_placeholder.error(f"⚠️ An unexpected error occurred while loading image: {e}")
 
+# --- Initialize YOLO Model and QueueAnalyzer ---
+# Download the model if it doesn't exist
+if not download_yolo_model(MODEL_PATH, MODEL_URL):
+    st.error("Failed to download YOLO model. Please check your network connection or MODEL_URL.")
+    st.stop() # Stop the app if model cannot be loaded
+
+# Load the YOLO model and initialize QueueAnalyzer
+model = YOLO(MODEL_PATH)
+analyzer = QueueAnalyzer(model)
+
+# Load historical data for display and analytics
+history_df_for_display = load_queue_history_from_gcs_for_display()
+
+# --- Display Current Status and Trend ---
+current_queue_count = history_df_for_display['count'].iloc[-1] if not history_df_for_display.empty else 0
+with live_section_container:
     with col2:
-        # Load queue history for the latest count and trend
-        full_history_df = load_queue_history_from_gcs_for_display() # Load here once for entire app
-
-        if not full_history_df.empty and 'count' in full_history_df.columns:
-            latest_live_count = full_history_df['count'].iloc[-1]
-            live_count_metric_placeholder.metric("Detected People (Live)", int(latest_live_count))
-            
-            temp_analyzer = QueueAnalyzer(None) 
-            temp_analyzer.history_df = full_history_df 
-            trend_status_placeholder.write(f"**Trend:** {temp_analyzer.predict_trend()}")
-        else:
-            live_count_metric_placeholder.info("Waiting for live detection count.")
-            trend_status_placeholder.info("Waiting for trend data.")
+        live_count_metric_placeholder.metric(label="Current Queue Count", value=f"{current_queue_count} People")
+        trend_status_placeholder.markdown(f"**Queue Trend:** {analyzer.predict_trend()}")
 
 st.markdown("---")
 
-# --- Display Historical Data and Predictive Analytics ---
-st.header("Historical Data and Predictive Analytics")
+# --- Enhanced Predictive Analytics and Charts ---
+st.header("Historical Queue Analytics and Predictions")
 
-if not full_history_df.empty:
-    # Instantiate QueueAnalyzer once with the loaded full history
-    analyzer = QueueAnalyzer(None) 
-    analyzer.history_df = full_history_df
-
-    # --- Overall Best Times to Cross (Highly Visible) ---
-    st.subheader("When to Cross: Overall Best Times")
-    best_times_info = analyzer.get_overall_best_times()
-    
-    st.markdown(f"**Overall Best Day(s) to Cross:** <span style='color:green; font-weight:bold; font-size:1.2em;'>{best_times_info['best_day_name']}</span>", unsafe_allow_html=True)
-    st.markdown(f"**Overall Best Hour(s) to Cross:** <span style='color:green; font-weight:bold; font-size:1.2em;'>{best_times_info['best_hours']}</span>", unsafe_allow_html=True)
-    st.markdown("---")
-
-    # --- Best Times for Each Day of the Week (NEW Request) ---
-    st.subheader("Best Times for Each Day of the Week (Detailed)")
-    st.info("Based on historical averages, here are the quietest hours for each specific day. Use this for more granular planning.")
-    
-    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    
-    # Using columns for a more compact display of daily best times
-    cols = st.columns(3) # Display 3 days per row
-    for i, day_name in enumerate(day_names):
-        with cols[i % 3]: # Cycle through columns
-            hourly_averages_for_day = analyzer.get_hourly_averages_for_day(i)
-            
-            if not hourly_averages_for_day.empty and 'average_count' in hourly_averages_for_day.columns:
-                min_avg_count = hourly_averages_for_day['average_count'].min()
-                best_hours_df = hourly_averages_for_day[hourly_averages_for_day['average_count'] == min_avg_count]
-                best_hours_list = sorted(best_hours_df['hour'].unique())
-                
-                if best_hours_list:
-                    best_hours_str = ", ".join(f"{h:02d}:00-{h+1:02d}:02d" for h in best_hours_list)
-                    st.markdown(f"**{day_name}:** <span style='color:green; font-weight:bold;'>{best_hours_str}</span> (Avg: {min_avg_count:.0f})", unsafe_allow_html=True)
-                else:
-                    st.markdown(f"**{day_name}:** *No clear quiet hours.*")
-            else:
-                st.markdown(f"**{day_name}:** *No data.*")
-    st.markdown("---")
-
-    # --- NEW CHART: Hourly Trends for Each Day of the Week ---
-    analyze_hourly_trends_for_each_day(full_history_df, analyzer) # Pass analyzer instance
-
-    # --- Retained Charts from "Nicer Visuals" version ---
-
-    # 1. Graph: Hourly Queue Trends (Overall)
-    st.subheader("Overall Hourly Queue Trends")
-    hourly_fig, hourly_text = analyze_hourly_trends(full_history_df)
-    if hourly_fig:
-        st.plotly_chart(hourly_fig, use_container_width=True)
-        st.write(hourly_text)
-    else:
-        st.info(hourly_text)
-
-    # 2. Graph: Daily Queue Trends (Bar Chart - Overall)
-    st.subheader("Overall Daily Queue Trends")
-    daily_fig, daily_text = analyze_daily_trends(full_history_df)
-    if daily_fig:
-        st.plotly_chart(daily_fig, use_container_width=True)
-        st.write(daily_text)
-    else:
-        st.info(daily_text)
-
-    # 3. Graph: Queue Movement Speed
-    st.subheader("Queue Movement Speed")
-    movement_fig, movement_text = analyze_queue_movement_speed(full_history_df)
-    if movement_fig:
-        st.plotly_chart(movement_fig, use_container_width=True)
-        st.write(movement_text)
-    else:
-        st.info(movement_text)
-
-    # 4. Daily Queue Summary (Min, Max, Average)
-    st.subheader("Daily Queue Summary (Min, Max, Average)")
-    daily_summary_fig, daily_summary_text = analyze_daily_summary_queue(full_history_df)
-    if daily_summary_fig:
-        st.plotly_chart(daily_summary_fig, use_container_width=True)
-        st.write(daily_summary_text)
-    else:
-        st.info(daily_summary_text)
-
-    # 5. Raw Queue Count Over Time (with Zoom)
-    st.subheader("Raw Queue Count Over Time (with Zoom)")
-    df_for_raw_plot = full_history_df.reset_index()
-
-    if not df_for_raw_plot.empty:
-        fig_raw = px.line(
-            df_for_raw_plot,
-            x='timestamp',
-            y='count',
-            title='Raw Queue Count Over Time',
-            labels={'timestamp': 'Date and Time (Narva)', 'count': 'Queue Size (People)'}
-        )
-        fig_raw.update_xaxes(
-            rangeselector=dict(
-                buttons=list([
-                    dict(count=1, label="1d", step="day", stepmode="backward"),
-                    dict(count=7, label="1w", step="day", stepmode="backward"),
-                    dict(count=1, label="1m", step="month", stepmode="backward"),
-                    dict(step="all")
-                ])
-            ),
-            rangeslider=dict(visible=True),
-            type="date"
-        )
-        fig_raw.update_layout(hovermode="x unified")
-        st.plotly_chart(fig_raw, use_container_width=True)
-    else:
-        st.info("No raw queue data available.")
-
+# Overall Best Day and Hours to Cross
+best_overall_times = analyzer.get_overall_best_times()
+st.subheader("🗓️ Overall Best Day & Times to Cross (Historical Average)")
+if best_overall_times["best_day_name"] != "N/A":
+    st.info(f"Based on all historical data, the **best day** to cross is typically **{best_overall_times['best_day_name']}**, during the hours of **{best_overall_times['best_hours']}** (Narva Time).")
 else:
-    st.info("No historical queue data available yet. Please wait for the `queue_collector.py` worker to generate data and upload it to GCS.")
+    st.warning("Not enough historical data to determine overall best day and times to cross.")
 
-# --- Auto-refresh feature control ---
 st.markdown("---")
-st.info("Data for charts and live image updates automatically. The page does not refresh visibly.")
-st.caption(f"Live image updates every 5 seconds. Historical data updates every 60 seconds. (controlled by @st.cache_data ttl)")
+
+# Historical Average Queue Size by Hour
+hourly_fig, hourly_msg = analyze_hourly_trends(history_df_for_display)
+if hourly_fig:
+    st.plotly_chart(hourly_fig, use_container_width=True)
+    st.caption(hourly_msg)
+else:
+    st.info(hourly_msg)
+
+st.markdown("---")
+
+# Historical Average Queue Size by Day of Week
+daily_fig, daily_msg = analyze_daily_trends(history_df_for_display)
+if daily_fig:
+    st.plotly_chart(daily_fig, use_container_width=True)
+    st.caption(daily_msg)
+else:
+    st.info(daily_msg)
+
+st.markdown("---")
+
+# Hourly Change in Queue Size
+movement_fig, movement_msg = analyze_queue_movement_speed(history_df_for_display)
+if movement_fig:
+    st.plotly_chart(movement_fig, use_container_width=True)
+    st.caption(movement_msg)
+else:
+    st.info(movement_msg)
+
+st.markdown("---")
+
+# Daily Summary Chart
+daily_summary_fig, daily_summary_msg = analyze_daily_summary_queue(history_df_for_display)
+if daily_summary_fig:
+    st.plotly_chart(daily_summary_fig, use_container_width=True)
+    st.caption(daily_summary_msg)
+else:
+    st.info(daily_summary_msg)
+
+st.markdown("---")
+
+# Per-Day Hourly Charts (NEW section)
+analyze_hourly_trends_for_each_day(history_df_for_display, analyzer) # Pass analyzer here
+
+st.markdown("---")
+st.caption(f"Data last refreshed at: {datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S %Z%z')}")
+st.caption("Queue detections powered by YOLOv8. Historical data stored on Google Cloud Storage.")
