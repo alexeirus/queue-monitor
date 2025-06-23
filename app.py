@@ -1,5 +1,4 @@
 # app.py (streamlit_app.py) - Reverted to richer visuals, with enhanced predictions and new per-day hourly charts
-
 import os
 import time
 import streamlit as st
@@ -153,7 +152,7 @@ def analyze_hourly_trends(df):
     ]
     if not best_hours_df.empty:
         best_times = best_hours_df.sort_values('Average Queue').head(3)
-        best_times_str = ", ".join([f"{int(h):02d}:00-{int(h)+1:02d}:00" for h in best_times['Hour']])
+        best_times_str = ", ".join([f"{int(h):02d}:00-{int(h)+1:02d}:02d" for h in best_times['Hour']])
     else:
         best_times_str = "N/A (No data for strict operational hours)"
 
@@ -193,7 +192,6 @@ def analyze_daily_trends(df):
     )
     fig.update_layout(hovermode="x unified")
 
-    # FIX: Corrected variable name from best_daily_avg_merged to daily_avg_merged
     best_days_df = daily_avg_merged[daily_avg_merged['Average Queue'] > 0] 
     if not best_days_df.empty:
         best_days = best_days_df.sort_values('Average Queue').head(3)
@@ -305,33 +303,56 @@ def analyze_daily_summary_queue(df):
 def analyze_hourly_trends_for_each_day(df, analyzer):
     """
     Generates a series of Plotly bar charts, one for each day of the week,
-    showing average queue counts per hour.
+    showing average queue counts per hour, presented in a tabbed format.
+    Also displays the best time to cross for each specific day.
     """
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     
     st.subheader("Hourly Queue Trends for Each Day of the Week")
-    st.info("These charts show the average queue size for each hour, broken down by day of the week. This helps identify the quietest times on specific days.")
+    st.info("These charts show the average queue size for each hour, broken down by day of the week. Use the tabs below to switch between days. This helps identify the quietest times on specific days.")
+
+    # Create tabs for each day
+    tabs = st.tabs(day_names)
 
     for i, day_name in enumerate(day_names):
-        hourly_averages = analyzer.get_hourly_averages_for_day(i) # Use the analyzer's method
+        with tabs[i]: # Place content inside the current tab
+            hourly_averages = analyzer.get_hourly_averages_for_day(i) # Use the analyzer's method
 
-        if not hourly_averages.empty and 'average_count' in hourly_averages.columns:
-            fig = px.bar(
-                hourly_averages,
-                x='hour', # 'hour' should be a column now from queue_utils fix
-                y='average_count',
-                title=f'Average Queue Size for {day_name}',
-                labels={'hour': 'Hour of Day (Narva)', 'average_count': 'Average Queue Size (People)'},
-                text='average_count' # Display value on top of bars
-            )
-            fig.update_traces(texttemplate='%{text:.0f}', textposition='outside')
-            fig.update_layout(uniformtext_minsize=8, uniformtext_mode='hide', hovermode="x unified")
-            fig.update_xaxes(dtick=1, range=[-0.5, 23.5]) # Ensure all hours are displayed
-            fig.update_yaxes(range=[0, hourly_averages['average_count'].max() * 1.1]) # Adjust y-axis for better visibility
+            if not hourly_averages.empty and 'average_count' in hourly_averages.columns:
+                # Calculate and display Best Time to Cross for this specific day
+                operational_hourly_averages = hourly_averages[
+                    (hourly_averages['hour'] >= OPERATIONAL_START_HOUR) &
+                    (hourly_averages['hour'] < OPERATIONAL_END_HOUR)
+                ]
 
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.markdown(f"**{day_name}:** *No sufficient historical data available for this day to generate a detailed hourly trend.*")
+                if not operational_hourly_averages.empty:
+                    min_queue = operational_hourly_averages['average_count'].min()
+                    # Find all hours that have this minimum average count
+                    best_hours_for_day = operational_hourly_averages[
+                        operational_hourly_averages['average_count'] == min_queue
+                    ]['hour'].tolist()
+
+                    best_hours_str = ", ".join([f"{int(h):02d}:00-{int(h)+1:02d}:00" for h in sorted(best_hours_for_day)])
+                    st.success(f"**Best Time to Cross on {day_name}:** Approximately **{best_hours_str}** (average queue: {min_queue:.0f} people).")
+                else:
+                    st.info(f"No sufficient historical data for **{day_name}** during operational hours to determine best times.")
+
+                fig = px.bar(
+                    hourly_averages,
+                    x='hour',
+                    y='average_count',
+                    title=f'Average Queue Size for {day_name}',
+                    labels={'hour': 'Hour of Day (Narva)', 'average_count': 'Average Queue Size (People)'},
+                    text='average_count' # Display value on top of bars
+                )
+                fig.update_traces(texttemplate='%{text:.0f}', textposition='outside')
+                fig.update_layout(uniformtext_minsize=8, uniformtext_mode='hide', hovermode="x unified")
+                fig.update_xaxes(dtick=1, range=[-0.5, 23.5]) # Ensure all hours are displayed
+                fig.update_yaxes(range=[0, hourly_averages['average_count'].max() * 1.1]) # Adjust y-axis for better visibility
+
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.markdown(f"**{day_name}:** *No sufficient historical data available for this day to generate a detailed hourly trend.*")
     st.markdown("---")
 
 
@@ -396,21 +417,20 @@ with live_section_container:
     with col2:
         live_count_metric_placeholder.metric(label="Current Queue Count", value=f"{current_queue_count} People")
         trend_status_placeholder.markdown(f"**Queue Trend:** {analyzer.predict_trend()}")
+        
+        # --- Overall Best Day and Hours to Cross (Moved here) ---
+        best_overall_times = analyzer.get_overall_best_times()
+        st.markdown("##### 🗓️ Overall Best Time to Cross")
+        if best_overall_times["best_day_name"] != "N/A":
+            st.info(f"The **best day** historically is **{best_overall_times['best_day_name']}**, around **{best_overall_times['best_hours']}** (Narva Time).")
+        else:
+            st.warning("Not enough historical data to determine overall best day and times to cross.")
+
 
 st.markdown("---")
 
 # --- Enhanced Predictive Analytics and Charts ---
 st.header("Historical Queue Analytics and Predictions")
-
-# Overall Best Day and Hours to Cross
-best_overall_times = analyzer.get_overall_best_times()
-st.subheader("🗓️ Overall Best Day & Times to Cross (Historical Average)")
-if best_overall_times["best_day_name"] != "N/A":
-    st.info(f"Based on all historical data, the **best day** to cross is typically **{best_overall_times['best_day_name']}**, during the hours of **{best_overall_times['best_hours']}** (Narva Time).")
-else:
-    st.warning("Not enough historical data to determine overall best day and times to cross.")
-
-st.markdown("---")
 
 # Historical Average Queue Size by Hour
 hourly_fig, hourly_msg = analyze_hourly_trends(history_df_for_display)
@@ -452,7 +472,7 @@ else:
 
 st.markdown("---")
 
-# Per-Day Hourly Charts (NEW section)
+# Per-Day Hourly Charts (Now with tabs and per-day best times!)
 analyze_hourly_trends_for_each_day(history_df_for_display, analyzer) # Pass analyzer here
 
 st.markdown("---")
